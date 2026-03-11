@@ -8,8 +8,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 
-const DELAY_SAMPLE_WINDOW: usize = 20;
-const MIN_SAMPLES_FOR_WEIGHT: usize = 20;
+const SAMPLE_WINDOW: usize = 20;
 const PING_TIMES: u8 = 4;
 const HEALTH_CHECK_CONCURRENCY: usize = 10;
 const DELAY_SMOOTHING: f32 = 5.0;
@@ -34,8 +33,8 @@ impl Backend {
         Self {
             addr,
             connections: AtomicUsize::new(0),
-            delay_samples: Mutex::new(VecDeque::with_capacity(DELAY_SAMPLE_WINDOW)),
-            loss_samples: Mutex::new(VecDeque::with_capacity(DELAY_SAMPLE_WINDOW)),
+            delay_samples: Mutex::new(VecDeque::with_capacity(SAMPLE_WINDOW)),
+            loss_samples: Mutex::new(VecDeque::with_capacity(SAMPLE_WINDOW)),
             removed: AtomicBool::new(false),
         }
     }
@@ -43,7 +42,7 @@ impl Backend {
     pub(crate) fn record_delay(&self, delay_ms: f32) {
         let mut samples = self.delay_samples.lock();
         samples.push_back(delay_ms);
-        if samples.len() > DELAY_SAMPLE_WINDOW {
+        if samples.len() > SAMPLE_WINDOW {
             samples.pop_front();
         }
     }
@@ -51,7 +50,7 @@ impl Backend {
     pub(crate) fn record_loss(&self, is_loss: bool) {
         let mut samples = self.loss_samples.lock();
         samples.push_back(is_loss);
-        if samples.len() > DELAY_SAMPLE_WINDOW {
+        if samples.len() > SAMPLE_WINDOW {
             samples.pop_front();
         }
     }
@@ -92,7 +91,7 @@ impl Backend {
 
     fn get_weight(&self, delay_threshold: f32) -> f32 {
         let sample_count = self.get_sample_count();
-        if sample_count < MIN_SAMPLES_FOR_WEIGHT {
+        if sample_count < SAMPLE_WINDOW {
             return 1.0;
         }
 
@@ -365,7 +364,7 @@ impl LoadBalancer {
     pub(crate) fn check_and_evict(&self, backend: &Backend) -> bool {
         let sample_count = backend.get_sample_count();
         
-        if sample_count < MIN_SAMPLES_FOR_WEIGHT {
+        if sample_count < SAMPLE_WINDOW {
             return false;
         }
         
@@ -551,6 +550,13 @@ impl LoadBalancer {
                 let is_loss = success_count < PING_TIMES as u8;
                 backend.record_loss(is_loss);
                 
+                let sample_count = backend.get_sample_count();
+                if sample_count < SAMPLE_WINDOW {
+                    println!("[健康检查] {} 延迟 {:.1}ms ({}/{}) 样本不足 {}/{} ← 每分钟主动测速", 
+                        backend.addr, delay, success_count, PING_TIMES, sample_count, SAMPLE_WINDOW);
+                    return;
+                }
+                
                 let avg_delay = backend.get_avg_delay();
                 
                 if avg_delay > delay_threshold {
@@ -562,6 +568,13 @@ impl LoadBalancer {
             }
             None => {
                 backend.record_loss(true);
+                
+                let sample_count = backend.get_sample_count();
+                if sample_count < SAMPLE_WINDOW {
+                    println!("[健康检查] {} 测速失败 样本不足 {}/{} ← 每分钟主动测速", 
+                        backend.addr, sample_count, SAMPLE_WINDOW);
+                    return;
+                }
                 
                 let loss_rate = backend.get_loss_rate();
                 if loss_rate > loss_threshold {

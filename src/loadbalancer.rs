@@ -21,7 +21,6 @@ pub(crate) struct Backend {
     delay_samples: std::sync::Mutex<VecDeque<f32>>,
     loss_samples: std::sync::Mutex<VecDeque<bool>>,
     removed: AtomicBool,
-    sample_count: AtomicUsize,
 }
 
 impl Backend {
@@ -32,7 +31,6 @@ impl Backend {
             delay_samples: std::sync::Mutex::new(VecDeque::with_capacity(DELAY_SAMPLE_WINDOW)),
             loss_samples: std::sync::Mutex::new(VecDeque::with_capacity(DELAY_SAMPLE_WINDOW)),
             removed: AtomicBool::new(false),
-            sample_count: AtomicUsize::new(0),
         }
     }
 
@@ -50,7 +48,6 @@ impl Backend {
         if samples.len() > DELAY_SAMPLE_WINDOW {
             samples.pop_front();
         }
-        self.sample_count.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn get_avg_delay(&self) -> f32 {

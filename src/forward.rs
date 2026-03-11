@@ -63,16 +63,21 @@ async fn handle_client(
     );
 
     let start = Instant::now();
-    let mut connect_delay = 0.0f32;
+    let mut request_delay = 0.0f32;
 
     let result = async {
         let mut server = TcpStream::connect(target_addr).await?;
-        connect_delay = start.elapsed().as_secs_f32() * 1000.0;
-        
-        lb.record_delay(&backend, connect_delay);
-        lb.record_loss(&backend, false);
         
         server.write_all(&buf[..n]).await?;
+        
+        server.readable().await?;
+        let mut tmp = [0u8; 1];
+        let _ = server.try_read(&mut tmp);
+        request_delay = start.elapsed().as_secs_f32() * 1000.0;
+        
+        lb.record_delay(&backend, request_delay);
+        lb.record_loss(&backend, false);
+        
         io::copy_bidirectional(&mut client, &mut server).await?;
         Ok::<_, io::Error>(())
     }
@@ -87,7 +92,7 @@ async fn handle_client(
     if should_evict {
         lb.remove_backend(backend.clone());
         lb.refill_from_backup();
-        println!("[剔除] {} 延迟 {:.1}ms 超阈值 ← 用户请求触发", backend.addr, connect_delay);
+        println!("[剔除] {} 延迟 {:.1}ms 超阈值 ← 用户请求触发", backend.addr, request_delay);
     }
 
     lb.release(&backend);

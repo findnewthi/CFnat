@@ -19,3 +19,4 @@ hyper-util = { version = "0.1", features = ["client-legacy"], default-features =
 hyper-rustls = { version = "0.27", features = ["ring", "webpki-roots", "http1"], default-features = false }
 http = { version = "1", default-features = false }
 tower-service = { version = "0.3", default-features = false }
+parking_lot = "0.12"

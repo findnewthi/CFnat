@@ -1,0 +1,23 @@
+[package]
+name = "CFnat"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "CFnat"
+path = "src/main.rs"
+
+[[bin]]
+name = "test"
+path = "test/src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+hyper = { version = "1", features = ["client"], default-features = false }
+rustls-pki-types = { version = "1", default-features = false }
+hyper-util = { version = "0.1", features = ["client-legacy"], default-features = false }
+hyper-rustls = { version = "0.27", features = ["ring", "webpki-roots", "http1"], default-features = false }
+http = { version = "1", default-features = false }
+http-body = { version = "1", default-features = false }
+bytes = { version = "1", default-features = false }
+tower-service = { version = "0.3", default-features = false }

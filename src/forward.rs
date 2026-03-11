@@ -1,32 +1,29 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::loadbalancer::LoadBalancer;
+
+const READABLE_TIMEOUT_SECS: u64 = 10;
 
 fn is_tls(buf: &[u8]) -> bool {
     buf.len() >= 1 && buf[0] == 0x16
 }
 
-fn is_http(buf: &[u8]) -> bool {
-    buf.len() >= 1 && buf[0] != 0x16
-}
-
 async fn handle_client(
-    mut client: TcpStream,
-    lb: &LoadBalancer,
+    client: TcpStream,
+    lb: Arc<LoadBalancer>,
     tls_port: u16,
     http_port: u16,
 ) -> io::Result<()> {
-    let mut buf = [0u8; 8192];
-    let n = client.read(&mut buf).await?;
-
-    if n == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "无数据"));
-    }
+    let mut buf = [0u8; 1];
+    
+    let peer_addr = client.peer_addr().ok();
+    let client: TcpStream = client;
+    client.peek(&mut buf).await?;
 
     let backend = lb.select().ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "无可用后端")
@@ -37,16 +34,14 @@ async fn handle_client(
     let loss_rate = backend.get_loss_rate() * 100.0;
     
     println!(
-        "[选择] {} ← 负载均衡选择后端 (延迟: {:.1}ms, 丢包: {:.1}%, 样本: {})",
+        "[选择] {} ← 负载均衡选择后端 (延迟：{:.1}ms, 丢包：{:.1}%, 样本：{})",
         backend.addr, avg_delay, loss_rate, sample_count
     );
 
-    let (port, proto) = if is_tls(&buf[..n]) {
+    let (port, proto) = if is_tls(&buf) {
         (tls_port, "TLS")
-    } else if is_http(&buf[..n]) {
-        (http_port, "HTTP")
     } else {
-        (tls_port, "未知")
+        (http_port, "HTTP")
     };
 
     let target_addr = std::net::SocketAddr::new(backend.addr.ip(), port);
@@ -54,37 +49,62 @@ async fn handle_client(
     #[cfg(debug_assertions)]
     eprintln!(
         "[DEBUG] {} -> {} ({}) ← 用户发起请求",
-        client
-            .peer_addr()
-            .map(|a| a.to_string())
-            .unwrap_or_default(),
+        peer_addr.map(|a| a.to_string()).unwrap_or_default(),
         target_addr,
         proto
     );
 
-    let start = Instant::now();
-    let mut request_delay = 0.0f32;
-
     let result = async {
-        let mut server = TcpStream::connect(target_addr).await?;
+        let server = TcpStream::connect(target_addr).await?;
         
-        server.write_all(&buf[..n]).await?;
+        let start = Instant::now();
         
-        server.readable().await?;
-        let mut tmp = [0u8; 1];
-        let _ = server.try_read(&mut tmp);
-        request_delay = start.elapsed().as_secs_f32() * 1000.0;
+        server.set_nodelay(true)?;
+        let client = client;
+        client.set_nodelay(true)?;
         
-        lb.record_delay(&backend, request_delay);
-        lb.record_loss(&backend, false);
+        let (mut client_read, mut client_write) = client.into_split();
+        let (mut server_read, mut server_write) = server.into_split();
         
-        io::copy_bidirectional(&mut client, &mut server).await?;
-        Ok::<_, io::Error>(())
+        let lb_inner = lb.clone();
+        let backend_inner = backend.clone();
+        
+        let s2c = async move {
+            match tokio::time::timeout(
+                Duration::from_secs(READABLE_TIMEOUT_SECS),
+                server_read.readable()
+            ).await {
+                Ok(Ok(_)) => {
+                    let delay = start.elapsed().as_secs_f32() * 1000.0;
+                    lb_inner.record_delay(&backend_inner, delay);
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("后端 {} 秒无响应", READABLE_TIMEOUT_SECS)
+                    ));
+                }
+            }
+            
+            io::copy(&mut server_read, &mut client_write).await
+        };
+        
+        let c2s = io::copy(&mut client_read, &mut server_write);
+        
+        let result = tokio::select! {
+            res = c2s => res,
+            res = s2c => res,
+        };
+        
+        result
     }
     .await;
     
     if result.is_err() {
         lb.record_loss(&backend, true);
+    } else {
+        lb.record_loss(&backend, false);
     }
 
     let should_evict = lb.check_and_evict(&backend);
@@ -92,7 +112,7 @@ async fn handle_client(
     if should_evict {
         lb.remove_backend(backend.clone());
         lb.refill_from_backup();
-        println!("[剔除] {} 延迟 {:.1}ms 超阈值 ← 用户请求触发", backend.addr, request_delay);
+        println!("[剔除] {} 延迟或丢包超阈值 ← 用户请求触发", backend.addr);
     }
 
     lb.release(&backend);
@@ -121,7 +141,7 @@ pub(crate) async fn run_forward(
 
         let lb = lb.clone();
         tokio::spawn(async move {
-            if let Err(_e) = handle_client(client, &lb, tls_port, http_port).await {}
+            if let Err(_e) = handle_client(client, lb, tls_port, http_port).await {}
         });
     }
 }

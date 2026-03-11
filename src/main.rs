@@ -60,7 +60,7 @@ async fn main() {
             &http,
             args.tls_port,
             args.http_port,
-            args.delay_limit,
+            1800,
             args.delay_limit,
             colo_filter.as_deref(),
             notify_rx,

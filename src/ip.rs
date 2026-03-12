@@ -34,6 +34,16 @@ impl IpCidr {
         (start, end)
     }
 
+    pub(crate) fn prefix_len(&self) -> u8 {
+        match self {
+            IpCidr::V4(_, len) | IpCidr::V6(_, len) => *len,
+        }
+    }
+
+    pub(crate) fn is_single_host(&self) -> bool {
+        matches!(self, IpCidr::V4(_, 32) | IpCidr::V6(_, 128))
+    }
+
     pub(crate) fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() != 2 {
@@ -51,6 +61,23 @@ impl IpCidr {
     }
 }
 
+fn calculate_sample_count(prefix: u8, is_ipv4: bool) -> u128 {
+    let max_bits: u8 = if is_ipv4 { 31 } else { 127 };
+    let host_bits = max_bits.saturating_sub(prefix);
+    let sample_exp = host_bits.min(18).saturating_sub(2);
+    1u128 << sample_exp
+}
+
+fn generate_lcg_offset(current_index: usize, addr: u64) -> u128 {
+    const LCG_A: u64 = 6364136223846793005;
+    const LCG_C: u64 = 1442695040888963407;
+    let seed = (current_index as u64)
+        .wrapping_mul(LCG_A)
+        .wrapping_add(LCG_C)
+        .wrapping_add(addr);
+    (seed >> 16) as u128
+}
+
 enum IpSource {
     Single {
         ip: IpAddr,
@@ -58,8 +85,10 @@ enum IpSource {
     },
     Cidr {
         start: u128,
-        end: u128,
-        current: AtomicU64,
+        interval_size: u128,
+        last_size: u128,
+        total_count: u64,
+        current: AtomicUsize,
         is_v6: bool,
     },
 }
@@ -73,12 +102,28 @@ impl IpSource {
                 }
                 Some(*ip)
             }
-            IpSource::Cidr { start, end, current, is_v6 } => {
-                let idx = current.fetch_add(1, Ordering::Relaxed) as u128;
-                if idx >= *end - *start {
+            IpSource::Cidr { start, interval_size, last_size, total_count, current, is_v6 } => {
+                let idx = current.fetch_add(1, Ordering::Relaxed);
+                let total = *total_count as usize;
+                if idx >= total {
                     return None;
                 }
-                let ip_val = *start + idx;
+                
+                let interval = *interval_size;
+                let interval_start = *start + (idx as u128 * interval);
+                let actual_interval_size = if idx == total - 1 {
+                    *last_size
+                } else {
+                    interval
+                };
+                
+                let random_offset = if actual_interval_size <= 1 {
+                    0
+                } else {
+                    generate_lcg_offset(idx, self as *const Self as u64) % actual_interval_size
+                };
+                
+                let ip_val = interval_start + random_offset;
                 if *is_v6 {
                     Some(IpAddr::V6(Ipv6Addr::from(ip_val)))
                 } else {
@@ -93,9 +138,8 @@ impl IpSource {
             IpSource::Single { consumed, .. } => {
                 consumed.load(Ordering::Relaxed)
             }
-            IpSource::Cidr { start, end, current, is_v6: _ } => {
-                let idx = current.load(Ordering::Relaxed) as u128;
-                idx >= *end - *start
+            IpSource::Cidr { total_count, current, .. } => {
+                current.load(Ordering::Relaxed) >= *total_count as usize
             }
         }
     }
@@ -123,7 +167,7 @@ impl IpPool {
     pub(crate) fn new(sources: &[String]) -> Self {
         let mut single_ips = Vec::new();
         let mut cidr_sources = Vec::new();
-        let mut total: u128 = 0;
+        let mut total: u64 = 0;
 
         for source in sources {
             let s = source.trim();
@@ -135,15 +179,43 @@ impl IpPool {
                 single_ips.push(ip);
                 total += 1;
             } else if let Some(cidr) = IpCidr::parse(s) {
-                let (start, end) = cidr.range_u128();
-                let count = end - start + 1;
-                cidr_sources.push(Arc::new(IpSource::Cidr {
-                    start,
-                    end: end + 1,
-                    current: AtomicU64::new(0),
-                    is_v6: matches!(cidr, IpCidr::V6(_, _)),
-                }));
-                total += count;
+                if cidr.is_single_host() {
+                    let ip = match cidr {
+                        IpCidr::V4(v4, _) => IpAddr::V4(v4),
+                        IpCidr::V6(v6, _) => IpAddr::V6(v6),
+                    };
+                    single_ips.push(ip);
+                    total += 1;
+                } else {
+                    let (start, end) = cidr.range_u128();
+                    let range_size = (end - start).saturating_add(1);
+                    
+                    let is_ipv6 = matches!(cidr, IpCidr::V6(_, _));
+                    let sample_count = calculate_sample_count(cidr.prefix_len(), !is_ipv6) as u128;
+                    
+                    let interval_size = if sample_count > 0 {
+                        range_size.saturating_div(sample_count).max(1)
+                    } else {
+                        1
+                    };
+                    
+                    let last_size = if sample_count > 0 {
+                        let last_start = start + (sample_count - 1) * interval_size;
+                        (end - last_start).saturating_add(1)
+                    } else {
+                        interval_size
+                    };
+                    
+                    cidr_sources.push(Arc::new(IpSource::Cidr {
+                        start,
+                        interval_size,
+                        last_size,
+                        total_count: sample_count as u64,
+                        current: AtomicUsize::new(0),
+                        is_v6: is_ipv6,
+                    }));
+                    total += sample_count as u64;
+                }
             }
         }
 
@@ -167,7 +239,7 @@ impl IpPool {
             sources: sources_vec,
             cursor: AtomicUsize::new(0),
             active_count: AtomicUsize::new(active_count),
-            total_count: AtomicU64::new(total as u64),
+            total_count: AtomicU64::new(total),
         }
     }
 

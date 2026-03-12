@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use http::Method;
 use tokio::task::JoinSet;
 
-use crate::hyper::{build_hyper_client, parse_url, send_request};
+use crate::hyper::{parse_url, send_request};
 use crate::ip::IpPool;
 use crate::loadbalancer::LoadBalancer;
 use crate::pool::GLOBAL_LIMITER;
@@ -42,7 +42,7 @@ async fn single_ping(
     Some((delay, colo, status))
 }
 
-async fn http_ping_multi(
+pub(crate) async fn http_ping_multi(
     ip: std::net::IpAddr,
     tls_port: u16,
     http_port: u16,
@@ -112,38 +112,6 @@ async fn http_ping_multi(
     Some((addr, avg_delay, colo, success_count))
 }
 
-pub(crate) async fn ping_single_ip(
-    ip: std::net::IpAddr,
-    tls_port: u16,
-    http_port: u16,
-    client: &crate::hyper::MyHyperClient,
-    host: &str,
-    scheme: &str,
-    path: &str,
-    timeout_ms: u64,
-) -> Option<(f32, u8)> {
-    let port = if scheme == "https" { tls_port } else { http_port };
-    let addr = SocketAddr::new(ip, port);
-    let uri: http::Uri = format!("{}://{}{}", scheme, addr, path).parse().ok()?;
-
-    let mut total_delay = 0.0f32;
-    let mut success_count = 0u8;
-
-    for _ in 0..PING_TIMES {
-        if let Some((delay, _, _)) = single_ping(client, host, &uri, timeout_ms).await {
-            total_delay += delay;
-            success_count += 1;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    }
-
-    if success_count == 0 {
-        return None;
-    }
-
-    Some((total_delay / success_count as f32, success_count))
-}
-
 pub(crate) async fn run_continuous_httping(
     ip_pool: Arc<IpPool>,
     lb: Arc<LoadBalancer>,
@@ -154,6 +122,7 @@ pub(crate) async fn run_continuous_httping(
     delay_limit: u64,
     colo_filter: Option<&[String]>,
     mut notify_rx: tokio::sync::watch::Receiver<bool>,
+    client: Arc<crate::hyper::MyHyperClient>,
 ) {
     let (_, host, scheme, path) = match parse_url(url) {
         Some(r) => r,
@@ -163,15 +132,6 @@ pub(crate) async fn run_continuous_httping(
         }
     };
 
-    let client = match build_hyper_client(timeout_ms, host.clone()) {
-        Some(c) => c,
-        None => {
-            eprintln!("创建 HTTP 客户端失败");
-            return;
-        }
-    };
-
-    let client = Arc::new(client);
     let host: Arc<str> = Arc::from(host.as_str());
     let scheme: Arc<str> = Arc::from(scheme);
     let path: Arc<str> = Arc::from(path.as_str());
@@ -254,9 +214,8 @@ pub(crate) async fn run_continuous_httping(
         }
 
         while tasks.len() < concurrency {
-            let ip = match ip_pool.pop() {
-                Some(ip) => ip,
-                None => break,
+            let Some(ip) = ip_pool.pop() else {
+                break;
             };
 
             if lb.contains(ip) {
@@ -264,11 +223,6 @@ pub(crate) async fn run_continuous_httping(
             }
 
             tasks.spawn(spawn_task(ip));
-        }
-
-        if tasks.is_empty() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
         }
 
         match tasks.join_next().await {

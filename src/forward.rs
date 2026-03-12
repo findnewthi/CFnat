@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,10 +22,13 @@ async fn handle_client(
     let mut buf = [0u8; 1];
     
     let peer_addr = client.peer_addr().ok();
+    let client_ip: IpAddr = peer_addr.map(|a| a.ip()).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "无法获取客户端IP")
+    })?;
     let client: TcpStream = client;
     client.peek(&mut buf).await?;
 
-    let backend = lb.select().ok_or_else(|| {
+    let backend = lb.select(client_ip).ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "无可用后端")
     })?;
 
@@ -110,9 +113,13 @@ async fn handle_client(
     let should_evict = lb.check_and_evict(&backend);
     
     if should_evict {
+        let avg_delay = backend.get_avg_delay();
+        let loss_rate = backend.get_loss_rate();
+        let delay_threshold = lb.get_delay_threshold();
         lb.remove_backend(backend.clone());
         lb.refill_from_backup();
-        println!("[剔除] {} 延迟或丢包超阈值 ← 用户请求触发", backend.addr);
+        println!("[剔除] {} 延迟 {:.1}ms/阈值 {:.1}ms 丢包率 {:.1}% ← 用户请求触发", 
+            backend.addr, avg_delay, delay_threshold, loss_rate * 100.0);
     }
 
     lb.release(&backend);
@@ -133,8 +140,6 @@ pub(crate) async fn run_forward(
     println!("TLS 端口: {}, HTTP 端口: {}", tls_port, http_port);
     println!("负载均衡 IP 数量: {}", lb.get_primary_count());
     println!("备选 IP 数量: {}", lb.get_backup_count());
-
-    lb.clone().start_health_check();
 
     loop {
         let (client, _) = listener.accept().await?;

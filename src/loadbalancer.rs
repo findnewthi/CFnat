@@ -3,21 +3,86 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 
 const SAMPLE_WINDOW: usize = 20;
 const PING_TIMES: u8 = 4;
-const HEALTH_CHECK_CONCURRENCY: usize = 10;
+const HEALTH_CHECK_CONCURRENCY: usize = 4;
 const DELAY_SMOOTHING: f32 = 5.0;
 const MAX_PROBE_ATTEMPTS: usize = 3;
+const SESSION_CACHE_SIZE: usize = 128;
 
 fn lcg_random(seed: u64) -> u64 {
     const LCG_A: u64 = 6364136223846793005;
     const LCG_C: u64 = 1442695040888963407;
     seed.wrapping_mul(LCG_A).wrapping_add(LCG_C)
+}
+
+struct SessionCache {
+    cache: Mutex<[(std::net::IpAddr, SocketAddr, u128); SESSION_CACHE_SIZE]>,
+    size: AtomicUsize,
+    cursor: AtomicUsize,
+    ttl: Duration,
+}
+
+impl SessionCache {
+    fn new() -> Self {
+        Self {
+            cache: Mutex::new([(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 
+                     SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)), 
+                     0); SESSION_CACHE_SIZE]),
+            size: AtomicUsize::new(0),
+            cursor: AtomicUsize::new(0),
+            ttl: Duration::from_secs(30),
+        }
+    }
+    
+    fn get(&self, client_ip: &std::net::IpAddr) -> Option<SocketAddr> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let size = self.size.load(Ordering::Relaxed);
+        
+        let cache = self.cache.lock();
+        for i in 0..size {
+            let (ip, addr, expiry) = cache[i];
+            if ip == *client_ip && now < expiry {
+                return Some(addr);
+            }
+        }
+        None
+    }
+    
+    fn put(&self, client_ip: std::net::IpAddr, backend_addr: SocketAddr) {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let expiry = now + self.ttl.as_nanos();
+        let size = self.size.load(Ordering::Relaxed);
+        
+        let mut cache = self.cache.lock();
+        for i in 0..size {
+            let (ip, _, _) = cache[i];
+            if ip == client_ip {
+                cache[i] = (client_ip, backend_addr, expiry);
+                return;
+            }
+        }
+        
+        if size < SESSION_CACHE_SIZE {
+            cache[size] = (client_ip, backend_addr, expiry);
+            self.size.store(size + 1, Ordering::Relaxed);
+            return;
+        }
+        
+        let idx = self.cursor.fetch_add(1, Ordering::Relaxed) % SESSION_CACHE_SIZE;
+        cache[idx] = (client_ip, backend_addr, expiry);
+    }
 }
 
 pub(crate) struct Backend {
@@ -74,7 +139,7 @@ impl Backend {
     }
 
     pub(crate) fn get_sample_count(&self) -> usize {
-        self.delay_samples.lock().len()
+        self.loss_samples.lock().len()
     }
 
     pub(crate) fn get_connections(&self) -> usize {
@@ -117,7 +182,7 @@ impl Backend {
 }
 
 struct HealthCheckConfig {
-    client: crate::hyper::MyHyperClient,
+    client: Arc<crate::hyper::MyHyperClient>,
     host: Arc<str>,
     scheme: Arc<str>,
     path: Arc<str>,
@@ -126,6 +191,7 @@ struct HealthCheckConfig {
     http_port: u16,
     delay_threshold: f32,
     loss_threshold: f32,
+    colo_filter: Option<Arc<Vec<String>>>,
 }
 
 pub(crate) struct LoadBalancer {
@@ -144,6 +210,9 @@ pub(crate) struct LoadBalancer {
     notify_tx: Option<tokio::sync::watch::Sender<bool>>,
     delay_threshold: f32,
     loss_threshold: f32,
+    client: Option<Arc<crate::hyper::MyHyperClient>>,
+    session_cache: Mutex<SessionCache>,
+    colo_filter: Option<Arc<Vec<String>>>,
 }
 
 impl LoadBalancer {
@@ -153,6 +222,7 @@ impl LoadBalancer {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64;
+        let session_cache = Mutex::new(SessionCache::new());
         Self {
             primary: RwLock::new(Vec::new()),
             backup: RwLock::new(Vec::new()),
@@ -169,6 +239,9 @@ impl LoadBalancer {
             notify_tx: None,
             delay_threshold: 0.0,
             loss_threshold: 0.0,
+            client: None,
+            session_cache,
+            colo_filter: None,
         }
     }
 
@@ -185,6 +258,15 @@ impl LoadBalancer {
     pub(crate) fn with_loss_threshold(mut self, loss_threshold: f32) -> Self {
         self.loss_threshold = loss_threshold;
         self
+    }
+
+    pub(crate) fn with_colo_filter(mut self, colo_filter: Option<Vec<String>>) -> Self {
+        self.colo_filter = colo_filter.map(|v| Arc::new(v));
+        self
+    }
+
+    pub(crate) fn get_delay_threshold(&self) -> f32 {
+        self.delay_threshold
     }
 
     pub(crate) fn with_health_check_url(mut self, url: String) -> Self {
@@ -205,6 +287,11 @@ impl LoadBalancer {
 
     pub(crate) fn with_notify(mut self, tx: tokio::sync::watch::Sender<bool>) -> Self {
         self.notify_tx = Some(tx);
+        self
+    }
+
+    pub(crate) fn with_client(mut self, client: Arc<crate::hyper::MyHyperClient>) -> Self {
+        self.client = Some(client);
         self
     }
 
@@ -289,7 +376,27 @@ impl LoadBalancer {
         }
     }
 
-    pub(crate) fn select(&self) -> Option<Arc<Backend>> {
+    pub(crate) fn select(&self, client_ip: std::net::IpAddr) -> Option<Arc<Backend>> {
+        {
+            let cache = self.session_cache.lock();
+            if let Some(backend_addr) = cache.get(&client_ip) {
+                let ip_set = self.ip_set.read();
+                if ip_set.contains(&backend_addr.ip()) {
+                    drop(ip_set);
+                    let primary = self.primary.read();
+                    let backend = primary.iter()
+                        .find(|b| b.addr == backend_addr)
+                        .cloned();
+                    drop(primary);
+                    
+                    if let Some(backend) = backend {
+                        backend.connections.fetch_add(1, Ordering::Relaxed);
+                        return Some(backend);
+                    }
+                }
+            }
+        }
+        
         let primary = self.primary.read();
         
         if primary.is_empty() {
@@ -301,6 +408,8 @@ impl LoadBalancer {
             let idx = self.current.fetch_add(1, Ordering::Relaxed);
             if let Some(selected) = self.select_round_robin(&backup, idx) {
                 selected.connections.fetch_add(1, Ordering::Relaxed);
+                let cache = self.session_cache.lock();
+                cache.put(client_ip, selected.addr);
                 return Some(selected);
             }
             return None;
@@ -327,6 +436,8 @@ impl LoadBalancer {
 
         if let Some(backend) = selected {
             backend.connections.fetch_add(1, Ordering::Relaxed);
+            let cache = self.session_cache.lock();
+            cache.put(client_ip, backend.addr);
             return Some(backend);
         }
 
@@ -453,16 +564,16 @@ impl LoadBalancer {
     }
 
     pub(crate) fn start_health_check(self: Arc<Self>) {
+        let client = match &self.client {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             
             let (_, host, scheme, path) = match crate::hyper::parse_url(&self.health_check_url) {
                 Some(r) => r,
-                None => return,
-            };
-
-            let client = match crate::hyper::build_hyper_client(self.timeout_ms, host.clone()) {
-                Some(c) => c,
                 None => return,
             };
             
@@ -476,6 +587,7 @@ impl LoadBalancer {
                 http_port: self.http_port,
                 delay_threshold: self.delay_threshold,
                 loss_threshold: self.loss_threshold,
+                colo_filter: self.colo_filter.clone(),
             });
 
             loop {
@@ -496,19 +608,20 @@ impl LoadBalancer {
                         continue;
                     }
 
-                    let lb = self.clone();
                     let config = config.clone();
+                    let lb = self.clone();
 
                     join_set.spawn(async move {
-                        let result = crate::httping::ping_single_ip(
+                        let result = crate::httping::http_ping_multi(
                             backend.addr.ip(),
                             config.tls_port,
                             config.http_port,
-                            &config.client,
-                            &config.host,
-                            &config.scheme,
-                            &config.path,
+                            config.client.clone(),
+                            config.host.clone(),
+                            config.scheme.clone(),
+                            config.path.clone(),
                             config.timeout_ms,
+                            config.colo_filter.clone(),
                         ).await;
 
                         (backend, result, config.delay_threshold, config.loss_threshold, lb)
@@ -538,32 +651,37 @@ impl LoadBalancer {
 
     fn handle_health_check_result(
         backend: Arc<Backend>,
-        result: Option<(f32, u8)>,
+        result: Option<(std::net::SocketAddr, f32, Option<String>, u8)>,
         delay_threshold: f32,
         loss_threshold: f32,
         lb: Arc<LoadBalancer>,
     ) {
         match result {
-            Some((delay, success_count)) => {
+            Some((_addr, delay, colo, success_count)) => {
                 backend.record_delay(delay);
                 
-                let is_loss = success_count < PING_TIMES as u8;
+                let is_loss = success_count < PING_TIMES;
                 backend.record_loss(is_loss);
                 
                 let sample_count = backend.get_sample_count();
+                let colo_str = colo.as_deref().unwrap_or("???");
+                
                 if sample_count < SAMPLE_WINDOW {
-                    println!("[健康检查] {} 延迟 {:.1}ms ({}/{}) 样本不足 {}/{} ← 每分钟主动测速", 
-                        backend.addr, delay, success_count, PING_TIMES, sample_count, SAMPLE_WINDOW);
+                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] 收集中 {}/{} ← 每分钟主动测速", 
+                        backend.addr, delay, success_count, PING_TIMES, colo_str, sample_count, SAMPLE_WINDOW);
                     return;
                 }
                 
                 let avg_delay = backend.get_avg_delay();
+                let loss_rate = backend.get_loss_rate();
                 
                 if avg_delay > delay_threshold {
-                    println!("[健康检查] {} 平均延迟 {:.1}ms 超阈值，移除 ← 每分钟主动测速", backend.addr, avg_delay);
+                    println!("[剔除] {} 延迟 {:.1}ms/阈值 {:.1}ms 丢包率 {:.1}% [{}] ← 每分钟主动测速", 
+                        backend.addr, avg_delay, delay_threshold, loss_rate * 100.0, colo_str);
                     lb.remove_backend(backend);
                 } else {
-                    println!("[健康检查] {} 延迟 {:.1}ms ({}/{}) 正常 ← 每分钟主动测速", backend.addr, delay, success_count, PING_TIMES);
+                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] 正常 ← 每分钟主动测速", 
+                        backend.addr, delay, success_count, PING_TIMES, colo_str);
                 }
             }
             None => {
@@ -571,17 +689,19 @@ impl LoadBalancer {
                 
                 let sample_count = backend.get_sample_count();
                 if sample_count < SAMPLE_WINDOW {
-                    println!("[健康检查] {} 测速失败 样本不足 {}/{} ← 每分钟主动测速", 
-                        backend.addr, sample_count, SAMPLE_WINDOW);
+                    println!("[健康检查] {} 测速失败 (成功0/{}) 收集中 {}/{} ← 每分钟主动测速", 
+                        backend.addr, PING_TIMES, sample_count, SAMPLE_WINDOW);
                     return;
                 }
                 
                 let loss_rate = backend.get_loss_rate();
+                let avg_delay = backend.get_avg_delay();
                 if loss_rate > loss_threshold {
-                    println!("[健康检查] {} 丢包率 {:.1}% 超阈值，移除 ← 每分钟主动测速", backend.addr, loss_rate * 100.0);
+                    println!("[剔除] {} 丢包率 {:.1}%/阈值 {:.1}% 延迟 {:.1}ms ← 每分钟主动测速", 
+                        backend.addr, loss_rate * 100.0, loss_threshold * 100.0, avg_delay);
                     lb.remove_backend(backend);
                 } else {
-                    println!("[健康检查] {} 测速失败 ← 每分钟主动测速", backend.addr);
+                    println!("[健康检查] {} 测速失败 (成功0/{}) ← 每分钟主动测速", backend.addr, PING_TIMES);
                 }
             }
         }

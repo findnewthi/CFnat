@@ -57,7 +57,6 @@ async fn main() {
 
     let lb = Arc::new(
         LoadBalancer::new(args.ips as usize)
-            .with_delay_limit(args.delay_limit as f32)
             .with_delay_threshold(args.delay_limit as f32)
             .with_loss_threshold(args.tlr as f32)
             .with_health_check_url(args.http.clone())

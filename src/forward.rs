@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, IpAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,13 +22,13 @@ async fn handle_client(
     let mut buf = [0u8; 1];
     
     let peer_addr = client.peer_addr().ok();
-    let client_ip: IpAddr = peer_addr.map(|a| a.ip()).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "无法获取客户端IP")
+    let (client_ip, source_port) = peer_addr.map(|a| (a.ip(), a.port())).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "无法获取客户端地址")
     })?;
     let client: TcpStream = client;
     client.peek(&mut buf).await?;
 
-    let backend = lb.select(client_ip).ok_or_else(|| {
+    let backend = lb.select(client_ip, source_port).ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "无可用后端")
     })?;
 

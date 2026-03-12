@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -11,77 +11,24 @@ use parking_lot::RwLock;
 const SAMPLE_WINDOW: usize = 20;
 const PING_TIMES: u8 = 4;
 const HEALTH_CHECK_CONCURRENCY: usize = 4;
-const DELAY_SMOOTHING: f32 = 5.0;
-const MAX_PROBE_ATTEMPTS: usize = 3;
-const SESSION_CACHE_SIZE: usize = 128;
 
-fn lcg_random(seed: u64) -> u64 {
-    const LCG_A: u64 = 6364136223846793005;
-    const LCG_C: u64 = 1442695040888963407;
-    seed.wrapping_mul(LCG_A).wrapping_add(LCG_C)
+fn fast_hash_ip_port(ip: IpAddr, port: u16) -> usize {
+    let mut h = match ip {
+        IpAddr::V4(v4) => v4.to_bits() as u64,
+        IpAddr::V6(v6) => {
+            let bits = v6.to_bits();
+            ((bits >> 64) ^ bits) as u64
+        }
+    };
+    h = h.wrapping_add(port as u64);
+    h = (h ^ (h >> 33)).wrapping_mul(0xff51afd7ed558ccd);
+    h as usize
 }
 
-struct SessionCache {
-    cache: Mutex<[(std::net::IpAddr, SocketAddr, u128); SESSION_CACHE_SIZE]>,
-    size: AtomicUsize,
-    cursor: AtomicUsize,
-    ttl: Duration,
-}
-
-impl SessionCache {
-    fn new() -> Self {
-        Self {
-            cache: Mutex::new([(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 
-                     SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0)), 
-                     0); SESSION_CACHE_SIZE]),
-            size: AtomicUsize::new(0),
-            cursor: AtomicUsize::new(0),
-            ttl: Duration::from_secs(30),
-        }
-    }
-    
-    fn get(&self, client_ip: &std::net::IpAddr) -> Option<SocketAddr> {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let size = self.size.load(Ordering::Relaxed);
-        
-        let cache = self.cache.lock();
-        for i in 0..size {
-            let (ip, addr, expiry) = cache[i];
-            if ip == *client_ip && now < expiry {
-                return Some(addr);
-            }
-        }
-        None
-    }
-    
-    fn put(&self, client_ip: std::net::IpAddr, backend_addr: SocketAddr) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let expiry = now + self.ttl.as_nanos();
-        let size = self.size.load(Ordering::Relaxed);
-        
-        let mut cache = self.cache.lock();
-        for i in 0..size {
-            let (ip, _, _) = cache[i];
-            if ip == client_ip {
-                cache[i] = (client_ip, backend_addr, expiry);
-                return;
-            }
-        }
-        
-        if size < SESSION_CACHE_SIZE {
-            cache[size] = (client_ip, backend_addr, expiry);
-            self.size.store(size + 1, Ordering::Relaxed);
-            return;
-        }
-        
-        let idx = self.cursor.fetch_add(1, Ordering::Relaxed) % SESSION_CACHE_SIZE;
-        cache[idx] = (client_ip, backend_addr, expiry);
+fn is_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        IpAddr::V6(v6) => v6.is_loopback(),
     }
 }
 
@@ -142,42 +89,12 @@ impl Backend {
         self.loss_samples.lock().len()
     }
 
-    pub(crate) fn get_connections(&self) -> usize {
-        self.connections.load(Ordering::Relaxed)
-    }
-
     pub(crate) fn is_removed(&self) -> bool {
         self.removed.load(Ordering::Relaxed)
     }
 
     pub(crate) fn mark_removed(&self) {
         self.removed.store(true, Ordering::Relaxed);
-    }
-
-    fn get_weight(&self, delay_threshold: f32) -> f32 {
-        let sample_count = self.get_sample_count();
-        if sample_count < SAMPLE_WINDOW {
-            return 1.0;
-        }
-
-        let avg_delay = self.get_avg_delay();
-        let loss_rate = self.get_loss_rate();
-
-        if avg_delay <= 0.0 {
-            return 1.0;
-        }
-
-        let base_weight = 1.0;
-        let loss_factor = 1.0 - loss_rate;
-        let delay_factor = delay_threshold / (avg_delay + DELAY_SMOOTHING);
-
-        let connections = self.get_connections() as f32;
-        let load_factor = 1.0 / (1.0 + connections / 10.0);
-
-        let raw_weight = base_weight * loss_factor * delay_factor * load_factor;
-        
-        let max_weight = delay_threshold / (DELAY_SMOOTHING + delay_threshold * 0.3);
-        raw_weight.min(max_weight)
     }
 }
 
@@ -198,11 +115,8 @@ pub(crate) struct LoadBalancer {
     primary: RwLock<Vec<Arc<Backend>>>,
     backup: RwLock<Vec<Arc<Backend>>>,
     ip_set: RwLock<HashSet<std::net::IpAddr>>,
-    current: AtomicUsize,
-    random_seed: AtomicU64,
     primary_target: usize,
     backup_target: usize,
-    delay_limit: f32,
     health_check_url: String,
     tls_port: u16,
     http_port: u16,
@@ -211,27 +125,18 @@ pub(crate) struct LoadBalancer {
     delay_threshold: f32,
     loss_threshold: f32,
     client: Option<Arc<crate::hyper::MyHyperClient>>,
-    session_cache: Mutex<SessionCache>,
     colo_filter: Option<Arc<Vec<String>>>,
 }
 
 impl LoadBalancer {
     pub(crate) fn new(primary_target: usize) -> Self {
         let backup_target = (primary_target as f32 * 0.5).ceil() as usize;
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
-        let session_cache = Mutex::new(SessionCache::new());
         Self {
             primary: RwLock::new(Vec::new()),
             backup: RwLock::new(Vec::new()),
             ip_set: RwLock::new(HashSet::new()),
-            current: AtomicUsize::new(0),
-            random_seed: AtomicU64::new(seed),
             primary_target,
             backup_target,
-            delay_limit: 0.0,
             health_check_url: String::new(),
             tls_port: 443,
             http_port: 80,
@@ -240,14 +145,8 @@ impl LoadBalancer {
             delay_threshold: 0.0,
             loss_threshold: 0.0,
             client: None,
-            session_cache,
             colo_filter: None,
         }
-    }
-
-    pub(crate) fn with_delay_limit(mut self, delay_limit: f32) -> Self {
-        self.delay_limit = delay_limit;
-        self
     }
 
     pub(crate) fn with_delay_threshold(mut self, delay_threshold: f32) -> Self {
@@ -317,131 +216,65 @@ impl LoadBalancer {
         }
     }
 
-    fn select_round_robin(&self, backends: &[Arc<Backend>], start_idx: usize) -> Option<Arc<Backend>> {
-        let len = backends.len();
-        for i in 0..len {
-            let idx = (start_idx + i) % len;
-            let backend = &backends[idx];
-            if !backend.is_removed() {
-                return Some(backend.clone());
-            }
+    pub(crate) fn select(&self, client_ip: IpAddr, source_port: u16) -> Option<Arc<Backend>> {
+        let primary = self.primary.read();
+        
+        if !primary.is_empty() {
+            return self.select_backend(client_ip, source_port, &primary);
         }
-        None
+        
+        drop(primary);
+        let backup = self.backup.read();
+        
+        if backup.is_empty() {
+            return None;
+        }
+        
+        self.select_backend(client_ip, source_port, &backup)
     }
 
-    fn select_power_of_two(&self, backends: &[Arc<Backend>], delay_threshold: f32) -> Option<Arc<Backend>> {
-        let len = backends.len();
+    fn select_backend(&self, client_ip: IpAddr, source_port: u16, pool: &[Arc<Backend>]) -> Option<Arc<Backend>> {
+        let len = pool.len();
         if len == 0 {
             return None;
         }
 
-        let seed1 = self.random_seed.fetch_add(1, Ordering::Relaxed);
-        let seed2 = self.random_seed.fetch_add(1, Ordering::Relaxed);
-        
-        let mut idx1 = (lcg_random(seed1) as usize) % len;
-        let mut idx2 = (lcg_random(seed2) as usize) % len;
-        
-        let mut b1 = &backends[idx1];
-        let mut b2 = &backends[idx2];
-        
-        let mut attempts = 0;
-        while b1.is_removed() && attempts < MAX_PROBE_ATTEMPTS {
-            idx1 = (idx1 + 1) % len;
-            b1 = &backends[idx1];
-            attempts += 1;
-        }
-        
-        if b1.is_removed() {
-            return self.select_round_robin(backends, idx1);
-        }
-        
-        attempts = 0;
-        while b2.is_removed() && attempts < MAX_PROBE_ATTEMPTS {
-            idx2 = (idx2 + 1) % len;
-            b2 = &backends[idx2];
-            attempts += 1;
-        }
-        
-        if b2.is_removed() {
-            return Some(b1.clone());
-        }
-
-        let w1 = b1.get_weight(delay_threshold);
-        let w2 = b2.get_weight(delay_threshold);
-
-        if w1 >= w2 {
-            Some(b1.clone())
+        let base_hash = if is_local_ip(client_ip) {
+            source_port as usize
         } else {
-            Some(b2.clone())
-        }
-    }
+            fast_hash_ip_port(client_ip, source_port)
+        };
 
-    pub(crate) fn select(&self, client_ip: std::net::IpAddr) -> Option<Arc<Backend>> {
-        {
-            let cache = self.session_cache.lock();
-            if let Some(backend_addr) = cache.get(&client_ip) {
-                let ip_set = self.ip_set.read();
-                if ip_set.contains(&backend_addr.ip()) {
-                    drop(ip_set);
-                    let primary = self.primary.read();
-                    let backend = primary.iter()
-                        .find(|b| b.addr == backend_addr)
-                        .cloned();
-                    drop(primary);
-                    
-                    if let Some(backend) = backend {
-                        backend.connections.fetch_add(1, Ordering::Relaxed);
-                        return Some(backend);
+        let idx1 = base_hash % len;
+        let idx2 = (base_hash + 1) % len;
+
+        let b1 = &pool[idx1];
+        let b2 = if len > 1 { Some(&pool[idx2]) } else { None };
+
+        let selected = match b2 {
+            Some(inner_b2) => {
+                let c1 = b1.connections.load(Ordering::Relaxed);
+                let c2 = inner_b2.connections.load(Ordering::Relaxed);
+
+                match (b1.is_removed(), inner_b2.is_removed()) {
+                    (false, false) => {
+                        if c1 <= c2 { b1 } else { inner_b2 }
                     }
+                    (false, true) => b1,
+                    (true, false) => inner_b2,
+                    (true, true) => return None,
                 }
             }
-        }
-        
-        let primary = self.primary.read();
-        
-        if primary.is_empty() {
-            drop(primary);
-            let backup = self.backup.read();
-            if backup.is_empty() {
-                return None;
+            None => {
+                if b1.is_removed() {
+                    return None;
+                }
+                b1
             }
-            let idx = self.current.fetch_add(1, Ordering::Relaxed);
-            if let Some(selected) = self.select_round_robin(&backup, idx) {
-                selected.connections.fetch_add(1, Ordering::Relaxed);
-                let cache = self.session_cache.lock();
-                cache.put(client_ip, selected.addr);
-                return Some(selected);
-            }
-            return None;
-        }
-
-        let idx = self.current.fetch_add(1, Ordering::Relaxed);
-        
-        let delay_threshold = if self.delay_limit > 0.0 {
-            self.delay_limit
-        } else {
-            self.delay_threshold
         };
 
-        let seed = self.random_seed.fetch_add(1, Ordering::Relaxed);
-        let r = lcg_random(seed) % 100;
-        
-        let selected = if r < 20 {
-            self.select_round_robin(&primary, idx)
-        } else {
-            self.select_power_of_two(&primary, delay_threshold)
-        };
-
-        drop(primary);
-
-        if let Some(backend) = selected {
-            backend.connections.fetch_add(1, Ordering::Relaxed);
-            let cache = self.session_cache.lock();
-            cache.put(client_ip, backend.addr);
-            return Some(backend);
-        }
-
-        None
+        selected.connections.fetch_add(1, Ordering::Relaxed);
+        Some(selected.clone())
     }
 
     fn cleanup_removed(&self) {

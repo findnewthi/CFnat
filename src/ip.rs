@@ -61,11 +61,12 @@ impl IpCidr {
     }
 }
 
+const DEFAULT_SAMPLES_PER_SUBNET: u128 = 5;
+
 fn calculate_sample_count(prefix: u8, is_ipv4: bool) -> u128 {
-    let max_bits: u8 = if is_ipv4 { 31 } else { 127 };
-    let host_bits = max_bits.saturating_sub(prefix);
-    let sample_exp = host_bits.min(18).saturating_sub(2);
-    1u128 << sample_exp
+    let threshold: u8 = if is_ipv4 { 24 } else { 48 };
+    let shift = u32::from(threshold.saturating_sub(prefix));
+    (1u128 << shift).saturating_mul(DEFAULT_SAMPLES_PER_SUBNET)
 }
 
 fn generate_lcg_offset(current_index: usize, addr: u64) -> u128 {
@@ -175,10 +176,17 @@ impl IpPool {
                 continue;
             }
 
-            if let Ok(ip) = s.parse::<IpAddr>() {
+            let (cidr_part, custom_count) = if let Some((cidr_part, count_str)) = s.split_once('=') {
+                let count = count_str.trim().parse::<u128>().ok().filter(|&n| n > 0);
+                (cidr_part.trim(), count)
+            } else {
+                (s, None)
+            };
+
+            if let Ok(ip) = cidr_part.parse::<IpAddr>() {
                 single_ips.push(ip);
                 total += 1;
-            } else if let Some(cidr) = IpCidr::parse(s) {
+            } else if let Some(cidr) = IpCidr::parse(cidr_part) {
                 if cidr.is_single_host() {
                     let ip = match cidr {
                         IpCidr::V4(v4, _) => IpAddr::V4(v4),
@@ -191,7 +199,12 @@ impl IpPool {
                     let range_size = (end - start).saturating_add(1);
                     
                     let is_ipv6 = matches!(cidr, IpCidr::V6(_, _));
-                    let sample_count = calculate_sample_count(cidr.prefix_len(), !is_ipv6) as u128;
+                    
+                    let sample_count = if let Some(count) = custom_count {
+                        count.min(range_size)
+                    } else {
+                        calculate_sample_count(cidr.prefix_len(), !is_ipv6) as u128
+                    };
                     
                     let interval_size = if sample_count > 0 {
                         range_size.saturating_div(sample_count).max(1)

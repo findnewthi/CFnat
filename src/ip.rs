@@ -63,20 +63,24 @@ impl IpCidr {
 
 const DEFAULT_SAMPLES_PER_SUBNET: u128 = 5;
 
+fn generate_clean_random(obj_addr: usize) -> u128 {
+    static SHARED_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
+    
+    let s = SHARED_STATE.fetch_add(obj_addr, Ordering::Relaxed);
+    
+    let mut x = s ^ obj_addr;
+    
+    let shift = (usize::BITS / 2) as u32;
+    x ^= x.rotate_left(shift);
+    x ^= x.swap_bytes();
+    x ^= obj_addr;
+    x as u128
+}
+
 fn calculate_sample_count(prefix: u8, is_ipv4: bool) -> u128 {
     let threshold: u8 = if is_ipv4 { 24 } else { 48 };
     let shift = u32::from(threshold.saturating_sub(prefix));
     (1u128 << shift).saturating_mul(DEFAULT_SAMPLES_PER_SUBNET)
-}
-
-fn generate_lcg_offset(current_index: usize, addr: u64) -> u128 {
-    const LCG_A: u64 = 6364136223846793005;
-    const LCG_C: u64 = 1442695040888963407;
-    let seed = (current_index as u64)
-        .wrapping_mul(LCG_A)
-        .wrapping_add(LCG_C)
-        .wrapping_add(addr);
-    (seed >> 16) as u128
 }
 
 enum IpSource {
@@ -121,7 +125,7 @@ impl IpSource {
                 let random_offset = if actual_interval_size <= 1 {
                     0
                 } else {
-                    generate_lcg_offset(idx, self as *const Self as u64) % actual_interval_size
+                    generate_clean_random(self as *const Self as usize) % actual_interval_size
                 };
                 
                 let ip_val = interval_start + random_offset;

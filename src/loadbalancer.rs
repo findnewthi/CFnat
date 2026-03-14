@@ -1,43 +1,47 @@
 use std::collections::HashSet;
-use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 
-const SAMPLE_WINDOW: usize = 20;
-const PING_TIMES: u8 = 4;
-const HEALTH_CHECK_CONCURRENCY: usize = 4;
-
-fn fast_hash_ip_port(ip: IpAddr, port: u16) -> usize {
-    let mut h = match ip {
-        IpAddr::V4(v4) => v4.to_bits() as u64,
-        IpAddr::V6(v6) => {
-            let bits = v6.to_bits();
-            ((bits >> 64) ^ bits) as u64
-        }
-    };
-    h = h.wrapping_add(port as u64);
-    h = (h ^ (h >> 33)).wrapping_mul(0xff51afd7ed558ccd);
-    h as usize
+const SAMPLE_WINDOW: f32 = 50.0; // EWMA 采样窗口大小
+const ALPHA: f32 = 2.0 / (SAMPLE_WINDOW + 1.0); // EWMA 平滑系数
+const EVICT_THRESHOLD: usize = 20; // 剔除检查的最小采样数
+const MAX_SMOOTH_RATIO: f32 = 5.0; // 最大平滑比率
+const MAX_BACKUP_TARGET: usize = 10; // 最大备选节点数
+const PING_TIMES: u8 = 4; // 每次健康检查的 ping 次数
+const HEALTH_CHECK_CONCURRENCY: usize = 4; // 健康检查并发数
+const HEALTH_CHECK_INTERVAL_SECS: u64 = 25; // 健康检查间隔（秒）
+const WARMING_DURATION_SECS: u64 = 60; // 预热持续时间（秒）
+const STICKY_BASE_SECS: u64 = 10; // 粘滞基础时间（秒）
+const STICKY_INCREMENT_SECS: u64 = 5; // 粘滞时间增量（秒）
+const MAX_STICKY_SLOTS: usize = 5; // 最大粘滞槽位数
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum BackendState {
+    Warming = 0,
+    Active = 1,
+    Removed = 2,
 }
 
-fn is_local_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
-        IpAddr::V6(v6) => v6.is_loopback(),
-    }
+struct StickySlot {
+    backend: Arc<Backend>,
+    last_switch: Instant,
+    last_access: Instant,
+    interval: Duration,
 }
 
 pub(crate) struct Backend {
     pub(crate) addr: SocketAddr,
     connections: AtomicUsize,
-    delay_samples: Mutex<VecDeque<f32>>,
-    loss_samples: Mutex<VecDeque<bool>>,
-    removed: AtomicBool,
+    avg_delay: Mutex<f32>,
+    avg_loss: Mutex<f32>,
+    sample_count: AtomicUsize,
+    state: AtomicU8,
+    entered_state_at: Mutex<Instant>,
 }
 
 impl Backend {
@@ -45,56 +49,105 @@ impl Backend {
         Self {
             addr,
             connections: AtomicUsize::new(0),
-            delay_samples: Mutex::new(VecDeque::with_capacity(SAMPLE_WINDOW)),
-            loss_samples: Mutex::new(VecDeque::with_capacity(SAMPLE_WINDOW)),
-            removed: AtomicBool::new(false),
+            avg_delay: Mutex::new(-1.0),
+            avg_loss: Mutex::new(-1.0),
+            sample_count: AtomicUsize::new(0),
+            state: AtomicU8::new(BackendState::Warming as u8),
+            entered_state_at: Mutex::new(Instant::now()),
+        }
+    }
+
+    pub(crate) fn new_with_initial(addr: SocketAddr, initial_delay: f32, initial_loss: f32) -> Self {
+        Self {
+            addr,
+            connections: AtomicUsize::new(0),
+            avg_delay: Mutex::new(initial_delay),
+            avg_loss: Mutex::new(initial_loss),
+            sample_count: AtomicUsize::new(0),
+            state: AtomicU8::new(BackendState::Warming as u8),
+            entered_state_at: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn update_ewma(current: &mut f32, new_val: f32, is_first: bool) {
+        if is_first {
+            *current = new_val;
+        } else {
+            *current = (*current * (1.0 - ALPHA)) + (new_val * ALPHA);
         }
     }
 
     pub(crate) fn record_delay(&self, delay_ms: f32) {
-        let mut samples = self.delay_samples.lock();
-        samples.push_back(delay_ms);
-        if samples.len() > SAMPLE_WINDOW {
-            samples.pop_front();
-        }
+        let is_first = self.sample_count.load(Ordering::Relaxed) == 0;
+        let mut lock = self.avg_delay.lock();
+        Self::update_ewma(&mut lock, delay_ms, is_first);
+        
+        self.sample_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            Some((count + 1).min(SAMPLE_WINDOW as usize))
+        }).ok();
     }
 
     pub(crate) fn record_loss(&self, is_loss: bool) {
-        let mut samples = self.loss_samples.lock();
-        samples.push_back(is_loss);
-        if samples.len() > SAMPLE_WINDOW {
-            samples.pop_front();
-        }
+        let is_first = self.sample_count.load(Ordering::Relaxed) == 0;
+        let mut lock = self.avg_loss.lock();
+        let loss = if is_loss { 1.0 } else { 0.0 };
+        Self::update_ewma(&mut lock, loss, is_first);
     }
 
     pub(crate) fn get_avg_delay(&self) -> f32 {
-        let samples = self.delay_samples.lock();
-        if samples.is_empty() {
-            0.0
-        } else {
-            samples.iter().sum::<f32>() / samples.len() as f32
-        }
+        self.avg_delay.lock().max(0.0)
     }
 
     pub(crate) fn get_loss_rate(&self) -> f32 {
-        let samples = self.loss_samples.lock();
-        if samples.is_empty() {
-            0.0
-        } else {
-            samples.iter().filter(|&&l| l).count() as f32 / samples.len() as f32
-        }
+        self.avg_loss.lock().max(0.0)
     }
 
     pub(crate) fn get_sample_count(&self) -> usize {
-        self.loss_samples.lock().len()
+        self.sample_count.load(Ordering::Relaxed)
     }
 
     pub(crate) fn is_removed(&self) -> bool {
-        self.removed.load(Ordering::Relaxed)
+        self.state.load(Ordering::Relaxed) == BackendState::Removed as u8
+    }
+
+    pub(crate) fn is_warming(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BackendState::Warming as u8
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BackendState::Active as u8
     }
 
     pub(crate) fn mark_removed(&self) {
-        self.removed.store(true, Ordering::Relaxed);
+        self.state.store(BackendState::Removed as u8, Ordering::Relaxed);
+        *self.entered_state_at.lock() = Instant::now();
+    }
+
+    fn mark_active(&self) {
+        self.state.store(BackendState::Active as u8, Ordering::Relaxed);
+        *self.entered_state_at.lock() = Instant::now();
+    }
+
+    fn check_warming_expired(&self) -> bool {
+        if self.is_warming() {
+            let elapsed = self.entered_state_at.lock().elapsed().as_secs();
+            elapsed >= WARMING_DURATION_SECS
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn calculate_score(&self, pool_avg_delay: f32, pool_avg_loss: f32) -> f32 {
+        let connections = self.connections.load(Ordering::Relaxed) as f32;
+        let beta = (self.get_sample_count() as f32 / SAMPLE_WINDOW).min(1.0);
+        
+        let my_perf = self.get_avg_delay() * (1.0 + self.get_loss_rate() * 2.0);
+        let pool_perf = (pool_avg_delay * (1.0 + pool_avg_loss * 2.0)).max(1.0);
+        
+        let ratio = if pool_perf > 0.0 { my_perf / pool_perf } else { 1.0 };
+        let smooth_ratio = (1.0 + beta * (ratio - 1.0)).min(MAX_SMOOTH_RATIO);
+        
+        (connections + 1.0) * smooth_ratio
     }
 }
 
@@ -113,10 +166,13 @@ struct HealthCheckConfig {
 
 pub(crate) struct LoadBalancer {
     primary: RwLock<Vec<Arc<Backend>>>,
+    primary_index: AtomicUsize,
     backup: RwLock<Vec<Arc<Backend>>>,
+    backup_index: AtomicUsize,
     ip_set: RwLock<HashSet<std::net::IpAddr>>,
     primary_target: usize,
     backup_target: usize,
+    min_active_target: usize,
     health_check_url: String,
     tls_port: u16,
     http_port: u16,
@@ -126,17 +182,23 @@ pub(crate) struct LoadBalancer {
     loss_threshold: f32,
     client: Option<Arc<crate::hyper::MyHyperClient>>,
     colo_filter: Option<Arc<Vec<String>>>,
+    sticky_slots: Mutex<Vec<StickySlot>>,
+    last_expand: Mutex<Instant>,
 }
 
 impl LoadBalancer {
     pub(crate) fn new(primary_target: usize) -> Self {
-        let backup_target = (primary_target as f32 * 0.5).ceil() as usize;
+        let backup_target = ((primary_target as f32 * 0.5).ceil() as usize).min(MAX_BACKUP_TARGET);
+        let min_active_target = (primary_target as f32 / 2.0).ceil() as usize;
         Self {
             primary: RwLock::new(Vec::new()),
+            primary_index: AtomicUsize::new(0),
             backup: RwLock::new(Vec::new()),
+            backup_index: AtomicUsize::new(0),
             ip_set: RwLock::new(HashSet::new()),
             primary_target,
             backup_target,
+            min_active_target,
             health_check_url: String::new(),
             tls_port: 443,
             http_port: 80,
@@ -146,6 +208,8 @@ impl LoadBalancer {
             loss_threshold: 0.0,
             client: None,
             colo_filter: None,
+            sticky_slots: Mutex::new(Vec::new()),
+            last_expand: Mutex::new(Instant::now()),
         }
     }
 
@@ -160,7 +224,7 @@ impl LoadBalancer {
     }
 
     pub(crate) fn with_colo_filter(mut self, colo_filter: Option<Vec<String>>) -> Self {
-        self.colo_filter = colo_filter.map(|v| Arc::new(v));
+        self.colo_filter = colo_filter.map(Arc::new);
         self
     }
 
@@ -216,11 +280,11 @@ impl LoadBalancer {
         }
     }
 
-    pub(crate) fn select(&self, client_ip: IpAddr, source_port: u16) -> Option<Arc<Backend>> {
+    pub(crate) fn select(&self) -> Option<Arc<Backend>> {
         let primary = self.primary.read();
         
         if !primary.is_empty() {
-            return self.select_backend(client_ip, source_port, &primary);
+            return self.select_backend_p2c(&primary, &self.primary_index);
         }
         
         drop(primary);
@@ -230,51 +294,132 @@ impl LoadBalancer {
             return None;
         }
         
-        self.select_backend(client_ip, source_port, &backup)
+        self.select_backend_p2c(&backup, &self.backup_index)
     }
 
-    fn select_backend(&self, client_ip: IpAddr, source_port: u16, pool: &[Arc<Backend>]) -> Option<Arc<Backend>> {
-        let len = pool.len();
-        if len == 0 {
+    fn select_backend_p2c(&self, pool: &[Arc<Backend>], index: &AtomicUsize) -> Option<Arc<Backend>> {
+        let now = Instant::now();
+        let mut slots = self.sticky_slots.lock();
+
+        slots.retain(|s| now.duration_since(s.last_access) < Duration::from_secs(15));
+
+        let get_active_unused = |used_addrs: &std::collections::HashSet<SocketAddr>| {
+            pool.iter()
+                .filter(|b| (b.is_active() || b.is_warming()) && !used_addrs.contains(&b.addr))
+                .min_by_key(|b| b.connections.load(Ordering::Relaxed))
+                .cloned()
+        };
+
+        let mut slots_to_rotate: Vec<(usize, Instant)> = Vec::new();
+        for (idx, slot) in slots.iter().enumerate() {
+            if now.duration_since(slot.last_switch) >= slot.interval {
+                slots_to_rotate.push((idx, now));
+            }
+        }
+
+        for (idx, _) in slots_to_rotate {
+            let used_addrs: std::collections::HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
+            if let Some(new_b) = get_active_unused(&used_addrs) {
+                slots[idx].backend = new_b;
+                slots[idx].last_switch = now;
+            }
+        }
+
+        let total_conns: usize = slots.iter().map(|s| s.backend.connections.load(Ordering::Relaxed)).sum();
+        let last_expand = self.last_expand.lock();
+        let should_expand = slots.is_empty() || (
+            slots.len() < MAX_STICKY_SLOTS && (
+                now.duration_since(*last_expand) >= Duration::from_secs(10) ||
+                slots.len() * slots.len() < total_conns
+            )
+        );
+        drop(last_expand);
+
+        if should_expand {
+            let used_addrs: std::collections::HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
+            if let Some(b) = get_active_unused(&used_addrs) {
+                let interval = Duration::from_secs(STICKY_BASE_SECS + (slots.len() as u64 * STICKY_INCREMENT_SECS));
+                slots.push(StickySlot {
+                    backend: b,
+                    last_switch: now,
+                    last_access: now,
+                    interval,
+                });
+                *self.last_expand.lock() = now;
+            }
+        }
+
+        if slots.is_empty() {
             return None;
         }
 
-        let base_hash = if is_local_ip(client_ip) {
-            source_port as usize
+        let len = slots.len();
+        let selected = if len == 1 {
+            &mut slots[0]
         } else {
-            fast_hash_ip_port(client_ip, source_port)
-        };
-
-        let idx1 = base_hash % len;
-        let idx2 = (base_hash + 1) % len;
-
-        let b1 = &pool[idx1];
-        let b2 = if len > 1 { Some(&pool[idx2]) } else { None };
-
-        let selected = match b2 {
-            Some(inner_b2) => {
-                let c1 = b1.connections.load(Ordering::Relaxed);
-                let c2 = inner_b2.connections.load(Ordering::Relaxed);
-
-                match (b1.is_removed(), inner_b2.is_removed()) {
-                    (false, false) => {
-                        if c1 <= c2 { b1 } else { inner_b2 }
-                    }
-                    (false, true) => b1,
-                    (true, false) => inner_b2,
-                    (true, true) => return None,
-                }
-            }
-            None => {
-                if b1.is_removed() {
-                    return None;
-                }
-                b1
+            let i = index.fetch_add(1, Ordering::Relaxed) % len;
+            let j = (i + 1) % len;
+            if slots[i].backend.connections.load(Ordering::Relaxed) <= slots[j].backend.connections.load(Ordering::Relaxed) {
+                &mut slots[i]
+            } else {
+                &mut slots[j]
             }
         };
 
-        selected.connections.fetch_add(1, Ordering::Relaxed);
-        Some(selected.clone())
+        selected.last_access = now;
+        selected.backend.connections.fetch_add(1, Ordering::Relaxed);
+        Some(selected.backend.clone())
+    }
+    
+    fn check_warming_backends(&self, pool: &mut Vec<Arc<Backend>>) {
+        for backend in pool.iter() {
+            if backend.check_warming_expired() {
+                backend.mark_active();
+            }
+        }
+    }
+
+    fn count_active(&self, pool: &[Arc<Backend>]) -> usize {
+        pool.iter().filter(|b| b.is_active()).count()
+    }
+
+    fn calculate_pool_avg_delay(&self, pool: &[Arc<Backend>]) -> f32 {
+        let mut total_delay = 0.0;
+        let mut total_samples = 0;
+
+        for backend in pool {
+            let sample_count = backend.get_sample_count();
+            if sample_count > 0 {
+                let avg_delay = backend.get_avg_delay();
+                total_delay += avg_delay * sample_count as f32;
+                total_samples += sample_count;
+            }
+        }
+
+        if total_samples == 0 {
+            1.0
+        } else {
+            total_delay / total_samples as f32
+        }
+    }
+
+    fn calculate_pool_avg_loss(&self, pool: &[Arc<Backend>]) -> f32 {
+        let mut total_loss = 0.0;
+        let mut total_samples = 0;
+
+        for backend in pool {
+            let sc = backend.get_sample_count();
+            if sc > 0 {
+                total_loss += backend.get_loss_rate() * sc as f32;
+                total_samples += sc;
+            }
+        }
+
+        if total_samples > 0 {
+            total_loss / total_samples as f32
+        } else {
+            0.0
+        }
     }
 
     fn cleanup_removed(&self) {
@@ -308,7 +453,15 @@ impl LoadBalancer {
     pub(crate) fn check_and_evict(&self, backend: &Backend) -> bool {
         let sample_count = backend.get_sample_count();
         
-        if sample_count < SAMPLE_WINDOW {
+        if sample_count < EVICT_THRESHOLD {
+            return false;
+        }
+        
+        let backup = self.backup.read();
+        let active_count = self.count_active(&backup);
+        drop(backup);
+        
+        if active_count <= self.min_active_target {
             return false;
         }
         
@@ -387,13 +540,26 @@ impl LoadBalancer {
             return;
         }
         
-        let backend = Arc::new(Backend::new(addr));
+        let pool_avg_delay = self.calculate_pool_avg_delay(&self.backup.read());
+        let pool_avg_loss = self.calculate_pool_avg_loss(&self.backup.read());
+        
+        let backend = Arc::new(Backend::new_with_initial(addr, pool_avg_delay, pool_avg_loss));
         self.backup.write().push(backend);
         self.ip_set.write().insert(ip);
     }
 
     pub(crate) fn get_backup_backends(&self) -> Vec<Arc<Backend>> {
         self.backup.read().clone()
+    }
+
+    fn sort_backup(&self, pool_avg_delay: f32, pool_avg_loss: f32) {
+        let mut backup = self.backup.write();
+        backup.sort_by(|a, b| {
+            let score_a = a.calculate_score(pool_avg_delay, pool_avg_loss);
+            let score_b = b.calculate_score(pool_avg_delay, pool_avg_loss);
+            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        self.backup_index.store(0, Ordering::Relaxed);
     }
 
     pub(crate) fn start_health_check(self: Arc<Self>) {
@@ -403,7 +569,7 @@ impl LoadBalancer {
         };
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut interval = tokio::time::interval(Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
             
             let (_, host, scheme, path) = match crate::hyper::parse_url(&self.health_check_url) {
                 Some(r) => r,
@@ -426,13 +592,18 @@ impl LoadBalancer {
             loop {
                 interval.tick().await;
 
+                {
+                    let mut backup = self.backup.write();
+                    self.check_warming_backends(&mut backup);
+                }
+
                 let backends = self.get_backup_backends();
                 
                 if backends.is_empty() {
                     continue;
                 }
 
-                println!("[健康检查] 开始并发检查 {} 个备选 IP ← 每分钟主动测速", backends.len());
+                println!("[健康检查] 开始并发检查 {} 个备选 IP ← 每{}秒主动测速", backends.len(), HEALTH_CHECK_INTERVAL_SECS);
 
                 let mut join_set = tokio::task::JoinSet::new();
 
@@ -462,22 +633,26 @@ impl LoadBalancer {
 
                     if join_set.len() >= HEALTH_CHECK_CONCURRENCY {
                         while join_set.len() >= HEALTH_CHECK_CONCURRENCY / 2 {
-                            if let Some(res) = join_set.join_next().await {
-                                if let Ok((backend, result, delay_threshold, loss_threshold, lb)) = res {
-                                    Self::handle_health_check_result(backend, result, delay_threshold, loss_threshold, lb);
-                                }
+                            if let Some(res) = join_set.join_next().await
+                                && let Ok((backend, result, delay_threshold, loss_threshold, lb)) = res
+                            {
+                                Self::handle_health_check_result(backend, result, delay_threshold, loss_threshold, lb);
                             }
                         }
                     }
                 }
 
-                while let Some(res) = join_set.join_next().await {
-                    if let Ok((backend, result, delay_threshold, loss_threshold, lb)) = res {
-                        Self::handle_health_check_result(backend, result, delay_threshold, loss_threshold, lb);
-                    }
+                while let Some(res) = join_set.join_next().await
+                    && let Ok((backend, result, delay_threshold, loss_threshold, lb)) = res
+                {
+                    Self::handle_health_check_result(backend, result, delay_threshold, loss_threshold, lb);
                 }
 
                 self.cleanup_removed();
+                
+                let pool_avg_delay = self.calculate_pool_avg_delay(&self.backup.read());
+                let pool_avg_loss = self.calculate_pool_avg_loss(&self.backup.read());
+                self.sort_backup(pool_avg_delay, pool_avg_loss);
             }
         });
     }
@@ -489,6 +664,14 @@ impl LoadBalancer {
         loss_threshold: f32,
         lb: Arc<LoadBalancer>,
     ) {
+        let state_str = if backend.is_warming() {
+            "预热中"
+        } else if backend.is_active() {
+            "正常"
+        } else {
+            "已移除"
+        };
+
         match result {
             Some((_addr, delay, colo, success_count)) => {
                 backend.record_delay(delay);
@@ -499,9 +682,9 @@ impl LoadBalancer {
                 let sample_count = backend.get_sample_count();
                 let colo_str = colo.as_deref().unwrap_or("???");
                 
-                if sample_count < SAMPLE_WINDOW {
-                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] 收集中 {}/{} ← 每分钟主动测速", 
-                        backend.addr, delay, success_count, PING_TIMES, colo_str, sample_count, SAMPLE_WINDOW);
+                if sample_count < SAMPLE_WINDOW as usize {
+                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] 收集中 {}/{} [{}] ← 每{}秒主动测速", 
+                        backend.addr, delay, success_count, PING_TIMES, colo_str, sample_count, SAMPLE_WINDOW as usize, state_str, HEALTH_CHECK_INTERVAL_SECS);
                     return;
                 }
                 
@@ -509,32 +692,32 @@ impl LoadBalancer {
                 let loss_rate = backend.get_loss_rate();
                 
                 if avg_delay > delay_threshold {
-                    println!("[剔除] {} 延迟 {:.1}ms/阈值 {:.1}ms 丢包率 {:.1}% [{}] ← 每分钟主动测速", 
-                        backend.addr, avg_delay, delay_threshold, loss_rate * 100.0, colo_str);
+                    println!("[剔除] {} 延迟 {:.1}ms/阈值 {:.1}ms 丢包率 {:.1}% [{}] ← 每{}秒主动测速", 
+                        backend.addr, avg_delay, delay_threshold, loss_rate * 100.0, colo_str, HEALTH_CHECK_INTERVAL_SECS);
                     lb.remove_backend(backend);
                 } else {
-                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] 正常 ← 每分钟主动测速", 
-                        backend.addr, delay, success_count, PING_TIMES, colo_str);
+                    println!("[健康检查] {} 延迟 {:.1}ms (成功{}/{}) [{}] [{}] ← 每{}秒主动测速", 
+                        backend.addr, delay, success_count, PING_TIMES, colo_str, state_str, HEALTH_CHECK_INTERVAL_SECS);
                 }
             }
             None => {
                 backend.record_loss(true);
                 
                 let sample_count = backend.get_sample_count();
-                if sample_count < SAMPLE_WINDOW {
-                    println!("[健康检查] {} 测速失败 (成功0/{}) 收集中 {}/{} ← 每分钟主动测速", 
-                        backend.addr, PING_TIMES, sample_count, SAMPLE_WINDOW);
+                if sample_count < SAMPLE_WINDOW as usize {
+                    println!("[健康检查] {} 测速失败 (成功0/{}) 收集中 {}/{} [{}] ← 每{}秒主动测速", 
+                        backend.addr, PING_TIMES, sample_count, SAMPLE_WINDOW as usize, state_str, HEALTH_CHECK_INTERVAL_SECS);
                     return;
                 }
                 
                 let loss_rate = backend.get_loss_rate();
                 let avg_delay = backend.get_avg_delay();
                 if loss_rate > loss_threshold {
-                    println!("[剔除] {} 丢包率 {:.1}%/阈值 {:.1}% 延迟 {:.1}ms ← 每分钟主动测速", 
-                        backend.addr, loss_rate * 100.0, loss_threshold * 100.0, avg_delay);
+                    println!("[剔除] {} 丢包率 {:.1}%/阈值 {:.1}% 延迟 {:.1}ms ← 每{}秒主动测速", 
+                        backend.addr, loss_rate * 100.0, loss_threshold * 100.0, avg_delay, HEALTH_CHECK_INTERVAL_SECS);
                     lb.remove_backend(backend);
                 } else {
-                    println!("[健康检查] {} 测速失败 (成功0/{}) ← 每分钟主动测速", backend.addr, PING_TIMES);
+                    println!("[健康检查] {} 测速失败 (成功0/{}) [{}] ← 每{}秒主动测速", backend.addr, PING_TIMES, state_str, HEALTH_CHECK_INTERVAL_SECS);
                 }
             }
         }

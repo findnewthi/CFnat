@@ -26,13 +26,13 @@ Cloudflare IP 延迟优选 + 负载均衡转发工具
 
 ```bash
 # 基本使用
-./cfnat -f ip.txt
+./CFnat -f ip.txt
 
 # 指定数据中心
-./cfnat -f ip.txt -colo HKG,LAX,SJC
+./CFnat -f ip.txt -colo HKG,LAX,SJC
 
 # 自定义参数
-./cfnat -f ip.txt -ips 20 -dl 500 -n 256 -addr 0.0.0.0:443
+./CFnat -f ip.txt -ips 20 -dl 500 -n 256 -addr 127.0.0.1:1234
 ```
 
 ## License

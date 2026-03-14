@@ -10,7 +10,7 @@ use crate::loadbalancer::LoadBalancer;
 const READABLE_TIMEOUT_SECS: u64 = 10;
 
 fn is_tls(buf: &[u8]) -> bool {
-    buf.len() >= 1 && buf[0] == 0x16
+    !buf.is_empty() && buf[0] == 0x16
 }
 
 async fn handle_client(
@@ -21,8 +21,6 @@ async fn handle_client(
 ) -> io::Result<()> {
     let mut buf = [0u8; 1];
     
-    let peer_addr = client.peer_addr().ok();
-    let client: TcpStream = client;
     client.peek(&mut buf).await?;
 
     let backend = lb.select().ok_or_else(|| {
@@ -38,21 +36,13 @@ async fn handle_client(
         backend.addr, avg_delay, loss_rate, sample_count
     );
 
-    let (port, proto) = if is_tls(&buf) {
-        (tls_port, "TLS")
+    let port = if is_tls(&buf) {
+        tls_port
     } else {
-        (http_port, "HTTP")
+        http_port
     };
 
     let target_addr = std::net::SocketAddr::new(backend.addr.ip(), port);
-
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[DEBUG] {} -> {} ({}) ← 用户发起请求",
-        peer_addr.map(|a| a.to_string()).unwrap_or_default(),
-        target_addr,
-        proto
-    );
 
     let result = async {
         let server = TcpStream::connect(target_addr).await?;
@@ -60,7 +50,6 @@ async fn handle_client(
         let start = Instant::now();
         
         server.set_nodelay(true)?;
-        let client = client;
         client.set_nodelay(true)?;
         
         let (mut client_read, mut client_write) = client.into_split();

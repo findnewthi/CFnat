@@ -75,7 +75,7 @@ fn generate_refined_random(obj_addr: usize) -> u128 {
 
     x = x.wrapping_mul(hasher_seed | 1);
 
-    x = x.rotate_left((usize::BITS / 2) as u32);
+    x = x.rotate_left(usize::BITS / 2);
     x = x.swap_bytes();
 
     x as u128
@@ -211,7 +211,7 @@ impl IpPool {
                     let sample_count = if let Some(count) = custom_count {
                         count.min(range_size)
                     } else {
-                        calculate_sample_count(cidr.prefix_len(), !is_ipv6) as u128
+                        calculate_sample_count(cidr.prefix_len(), !is_ipv6)
                     };
                     
                     let interval_size = if sample_count > 0 {
@@ -268,7 +268,7 @@ impl IpPool {
         let mut lines = Vec::new();
         
         if let Ok(file) = File::open(path) {
-            for line in io::BufReader::new(file).lines().flatten() {
+            for line in io::BufReader::new(file).lines().map_while(Result::ok) {
                 lines.push(line);
             }
         }

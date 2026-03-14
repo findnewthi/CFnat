@@ -1,16 +1,19 @@
 mod args;
+mod backend;
+mod config;
 mod forward;
 mod hyper;
 mod httping;
 mod ip;
 mod loadbalancer;
 mod pool;
+mod utils;
 
 use std::sync::Arc;
 
 use crate::args::{Args, print_help};
 use crate::forward::run_forward;
-use crate::httping::run_continuous_httping;
+use crate::httping::{run_continuous_httping, HttpingConfig};
 use crate::hyper::{build_hyper_client, parse_url};
 use crate::ip::IpPool;
 use crate::loadbalancer::LoadBalancer;
@@ -56,9 +59,9 @@ async fn main() {
     let colo_filter: Option<Vec<String>> = args.colo.clone();
 
     let lb = Arc::new(
-        LoadBalancer::new(args.ips as usize)
+        LoadBalancer::new(args.ips)
             .with_delay_threshold(args.delay_limit as f32)
-            .with_loss_threshold(args.tlr as f32)
+            .with_loss_threshold(args.tlr)
             .with_health_check_url(args.http.clone())
             .with_ports(args.tls_port, args.http_port)
             .with_timeout(1800)
@@ -70,20 +73,21 @@ async fn main() {
     let ip_pool_clone = ip_pool.clone();
     let lb_clone = lb.clone();
     let http = args.http.clone();
-    let client_clone = client.clone();
     
     tokio::spawn(async move {
         run_continuous_httping(
             ip_pool_clone,
             lb_clone,
             &http,
-            args.tls_port,
-            args.http_port,
-            1800,
-            args.delay_limit,
-            colo_filter.as_deref(),
+            HttpingConfig {
+                tls_port: args.tls_port,
+                http_port: args.http_port,
+                timeout_ms: 1800,
+                delay_limit: args.delay_limit,
+                colo_filter: colo_filter.map(Arc::new),
+                client,
+            },
             notify_rx,
-            client_clone,
         )
         .await;
     });

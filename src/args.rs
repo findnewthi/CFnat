@@ -61,15 +61,13 @@ impl Args {
                 }
                 "dl" => {
                     parsed.delay_limit = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.delay_limit)
-                        .clamp(1, 10000);
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map_or(parsed.delay_limit, |v| v.clamp(1, 2000));
                 }
                 "tlr" => {
                     parsed.tlr = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.tlr)
-                        .clamp(0.0, 1.0);
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .map_or(parsed.tlr, |v| v.clamp(0.0, 1.0));
                 }
                 "http" => {
                     if let Some(v) = v_opt {
@@ -78,27 +76,23 @@ impl Args {
                 }
                 "ips" => {
                     parsed.ips = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.ips)
-                        .clamp(1, 1000);
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .map_or(parsed.ips, |v| v.clamp(1, 128));
                 }
                 "n" => {
                     parsed.threads = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.threads)
-                        .clamp(1, 1024);
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .map_or(parsed.threads, |v| v.clamp(1, 1024));
                 }
                 "tp" => {
                     parsed.tls_port = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.tls_port)
-                        .clamp(1, u16::MAX);
+                        .and_then(|v| v.parse::<u16>().ok())
+                        .map_or(parsed.tls_port, |v| v.clamp(1, u16::MAX));
                 }
                 "p" => {
                     parsed.http_port = v_opt
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(parsed.http_port)
-                        .clamp(1, u16::MAX);
+                        .and_then(|v| v.parse::<u16>().ok())
+                        .map_or(parsed.http_port, |v| v.clamp(1, u16::MAX));
                 }
                 "f" => {
                     if let Some(v) = v_opt {

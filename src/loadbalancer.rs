@@ -57,7 +57,7 @@ pub(crate) enum AddResult {
 
 impl LoadBalancer {
     pub(crate) fn new(primary_target: usize) -> Self {
-        let backup_target = ((primary_target as f32 * 0.5).ceil() as usize).min(get_global_config().max_backup_target);
+        let backup_target = ((primary_target as f32 * 0.5).ceil() as usize).min(get_global_config().max_backup_target).max(2);
         let min_active_target = (primary_target as f32 / 2.0).ceil() as usize;
         Self {
             primary: RwLock::new(Vec::new()),

@@ -3,14 +3,6 @@ name = "CFnat"
 version = "1.0.0"
 edition = "2024"
 
-[[bin]]
-name = "CFnat"
-path = "src/main.rs"
-
-[[bin]]
-name = "test"
-path = "test/src/main.rs"
-
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 hyper = { version = "1", features = ["client"], default-features = false }

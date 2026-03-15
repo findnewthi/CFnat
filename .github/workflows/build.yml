@@ -165,7 +165,6 @@ jobs:
         with:
           path: stripped_artifacts/
           pattern: '*_*'
-          merge-multiple: true
       - name: Strip
         run: |
           Get-ChildItem -Recurse -File stripped_artifacts -Include *.exe, ${{ github.event.inputs.project_name }} | ForEach-Object {

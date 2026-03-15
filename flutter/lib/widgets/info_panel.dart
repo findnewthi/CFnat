@@ -151,7 +151,7 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
           ),
           const SizedBox(height: 8),
           Text(
-            '1秒后自动重连...',
+            '正在自动重连...',
             style: TextStyle(fontSize: 12, color: Colors.grey[600]),
           ),
         ],

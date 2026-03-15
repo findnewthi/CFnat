@@ -1,0 +1,154 @@
+mod handlers;
+mod routes;
+mod sse;
+
+pub use handlers::*;
+pub use routes::create_router;
+pub use sse::stream_updates;
+
+use axum::{
+    http::{header, StatusCode, Uri},
+    response::{IntoResponse, Response},
+};
+use rust_embed::RustEmbed;
+use serde::{Deserialize, Serialize, Serializer};
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use crate::core::ServiceState;
+
+fn serialize_f64<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_f64((*value * 100.0).round() / 100.0)
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub service: Arc<ServiceState>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ServerConfig {
+    pub addr: SocketAddr,
+    pub delay_limit: u64,
+    #[serde(serialize_with = "serialize_f64")]
+    pub tlr: f64,
+    pub ips: usize,
+    pub threads: usize,
+    pub tls_port: u16,
+    pub http_port: u16,
+    pub colo: Option<Vec<String>>,
+    pub http: String,
+    pub ip_file: String,
+}
+
+impl From<crate::core::ServiceConfig> for ServerConfig {
+    fn from(config: crate::core::ServiceConfig) -> Self {
+        Self {
+            addr: config.listen_addr,
+            delay_limit: config.delay_limit,
+            tlr: config.tlr,
+            ips: config.ips,
+            threads: config.threads,
+            tls_port: config.tls_port,
+            http_port: config.http_port,
+            colo: config.colo,
+            http: config.http,
+            ip_file: config.ip_file,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct StatusResponse {
+    pub running: bool,
+    pub next_health_check: u64,
+    pub health_check_interval: u64,
+    pub primary_count: usize,
+    pub primary_target: usize,
+    pub backup_count: usize,
+    pub backup_target: usize,
+    pub sticky_ips: Vec<String>,
+    pub primary_ips: Vec<IpInfo>,
+    pub backup_ips: Vec<IpInfo>,
+}
+
+#[derive(Serialize)]
+pub struct IpInfo {
+    pub ip: String,
+    pub colo: Option<String>,
+    pub delay: f64,
+    pub loss: f64,
+    pub samples: usize,
+}
+
+impl IpInfo {
+    pub fn from_backend(backend: &std::sync::Arc<crate::core::backend::Backend>) -> Self {
+        Self {
+            ip: backend.addr.ip().to_string(),
+            colo: backend.get_colo(),
+            delay: backend.get_avg_delay() as f64,
+            loss: backend.get_loss_rate() as f64,
+            samples: backend.get_sample_count(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct StartRequest {
+    pub ip_file: Option<String>,
+    pub http: Option<String>,
+    pub delay_limit: Option<u64>,
+    pub tlr: Option<f64>,
+    pub ips: Option<usize>,
+    pub threads: Option<usize>,
+    pub tls_port: Option<u16>,
+    pub http_port: Option<u16>,
+    pub colo: Option<Vec<String>>,
+    pub listen_addr: Option<SocketAddr>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateConfigRequest {
+    pub delay_limit: Option<u64>,
+    pub tlr: Option<f64>,
+    pub ips: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct ApiResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(RustEmbed)]
+#[folder = "flutter/build/web"]
+struct Assets;
+
+pub async fn serve_embedded_files(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    
+    if path.is_empty() || path == "index.html" {
+        return match Assets::get("index.html") {
+            Some(content) => (
+                [(header::CONTENT_TYPE, "text/html")],
+                content.data.into_owned(),
+            ).into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "text/html")],
+                "<h1>404 - 页面未找到</h1><p>请先构建Flutter Web界面</p>".as_bytes().to_vec(),
+            ).into_response(),
+        };
+    }
+    
+    match Assets::get(path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], content.data.into_owned()).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}

@@ -71,7 +71,7 @@ jobs:
       - name: 上传 Flutter Web 产物
         uses: actions/upload-artifact@v4
         with:
-          name: flutter_web
+          name: flutter-web
           path: flutter/build/web/
 
   matrix:
@@ -110,7 +110,7 @@ jobs:
       - name: 下载 Flutter Web 产物
         uses: actions/download-artifact@v4
         with:
-          name: flutter_web
+          name: flutter-web
           path: flutter/build/web/
 
       - name: 安装 Rust 工具链
@@ -164,6 +164,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: stripped_artifacts/
+          pattern: '*_*'
+          merge-multiple: true
       - name: Strip
         run: |
           Get-ChildItem -Recurse -File stripped_artifacts -Include *.exe, ${{ github.event.inputs.project_name }} | ForEach-Object {

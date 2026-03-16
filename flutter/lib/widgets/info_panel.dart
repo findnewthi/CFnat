@@ -37,8 +37,6 @@ class _InfoPanelState extends State<InfoPanel> {
                 children: [
                   _buildHealthCheckBar(status, constraints),
                   const SizedBox(height: 10),
-                  _buildSummaryChips(status),
-                  const SizedBox(height: 10),
                   Expanded(
                     child: isWide
                         ? Row(
@@ -158,64 +156,6 @@ class _InfoPanelState extends State<InfoPanel> {
     );
   }
 
-  Widget _buildSummaryChips(StatusData status) {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildSummaryCard(
-            title: '主队列',
-            value: '${status.primaryCount}/${status.primaryTarget}',
-            color: Colors.green,
-            icon: Icons.track_changes,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _buildSummaryCard(
-            title: '备选',
-            value: '${status.backupCount}/${status.backupTarget}',
-            color: Colors.blue,
-            icon: Icons.layers,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSummaryCard({
-    required String title,
-    required String value,
-    required Color color,
-    required IconData icon,
-  }) {
-    return Card(
-      elevation: 0,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(color: Colors.grey[400], fontSize: 12),
-              ),
-            ),
-            Text(
-              value,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildHealthCheckBar(StatusData status, BoxConstraints constraints) {
     return const SizedBox.shrink();
   }
@@ -233,6 +173,7 @@ class _InfoPanelState extends State<InfoPanel> {
     final titleSize = constraints.maxWidth > 400 ? 14.0 : 13.0;
     final ipSize = constraints.maxWidth > 400 ? 13.0 : 12.0;
     final headerSize = constraints.maxWidth > 400 ? 11.0 : 10.0;
+    final icon = title == '负载均衡' ? Icons.swap_horiz : Icons.backup;
     
     return Card(
       elevation: 0,
@@ -247,6 +188,8 @@ class _InfoPanelState extends State<InfoPanel> {
           ),
           child: Row(
             children: [
+              Icon(icon, color: color, size: titleSize),
+              const SizedBox(width: 6),
               Text(
                 title,
                 style: TextStyle(

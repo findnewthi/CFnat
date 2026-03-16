@@ -102,13 +102,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                '参数设置',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              Icon(Icons.settings, size: 30),
               _buildStatusBadge(isRunning, connected),
             ],
           ),
@@ -213,13 +207,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '参数设置',
-                style: TextStyle(
-                  fontSize: fontSize + 2,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              Icon(Icons.settings, size: 30),
               _buildStatusBadge(isRunning, connected),
             ],
           ),

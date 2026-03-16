@@ -108,11 +108,11 @@ impl LoadBalancer {
         let colo_string = colo.map(|s| s.to_string());
         
         if primary_count < primary_target {
-            self.add_to_primary(addr, colo_string);
+            self.add_to_primary(addr, delay, 0.0, colo_string);
             println!("[+] {} {:.0}ms [{}]", addr, delay, colo.unwrap_or(""));
             AddResult::AddedToPrimary
         } else if backup_count < backup_target {
-            self.add_to_backup(addr, colo_string);
+            self.add_to_backup(addr, delay, 0.0, colo_string);
             println!("[+] {} {:.0}ms [{}] (备选)", addr, delay, colo.unwrap_or(""));
             AddResult::AddedToBackup
         } else {
@@ -422,27 +422,24 @@ impl LoadBalancer {
         *backup_target_mut = backup_target;
     }
 
-    pub fn add_to_primary(&self, addr: SocketAddr, colo: Option<String>) {
+    pub fn add_to_primary(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>) {
         let ip = addr.ip();
         if self.contains(ip) {
             return;
         }
         
-        let backend = Arc::new(Backend::new_with_initial(addr, -1.0, -1.0, colo));
+        let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
         self.primary.write().push(backend);
         self.ip_set.write().insert(ip);
     }
 
-    pub fn add_to_backup(&self, addr: SocketAddr, colo: Option<String>) {
+    pub fn add_to_backup(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>) {
         let ip = addr.ip();
         if self.contains(ip) {
             return;
         }
         
-        let pool_avg_delay = self.calculate_pool_avg_delay(&self.backup.read());
-        let pool_avg_loss = self.calculate_pool_avg_loss(&self.backup.read());
-        
-        let backend = Arc::new(Backend::new_with_initial(addr, pool_avg_delay, pool_avg_loss, colo));
+        let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
         self.backup.write().push(backend);
         self.ip_set.write().insert(ip);
     }

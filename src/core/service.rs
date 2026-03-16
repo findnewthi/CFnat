@@ -115,9 +115,10 @@ impl ServiceState {
                 .with_colo_filter(colo_filter.clone()),
         );
 
+        let cancel_token_for_storage = cancel_token.clone();
         *self.ip_pool.write() = Some(ip_pool.clone());
         *self.loadbalancer.write() = Some(lb.clone());
-        *self.cancel_token.write() = Some(cancel_token);
+        *self.cancel_token.write() = Some(cancel_token_for_storage);
         self.running.store(true, Ordering::Relaxed);
 
         let ip_pool_clone = ip_pool.clone();
@@ -151,10 +152,11 @@ impl ServiceState {
         let lb_forward = lb.clone();
         let tls_port = config.tls_port;
         let http_port = config.http_port;
+        let forward_cancel_token = cancel_token.clone();
         
         tokio::spawn(async move {
-            if let Err(e) = run_forward(listen_addr, lb_forward, tls_port, http_port).await {
-                eprintln!("转发服务错误: {}", e);
+            if let Err(e) = run_forward(listen_addr, lb_forward, tls_port, http_port, forward_cancel_token).await {
+                eprintln!("转发服务错误：{}", e);
             }
         });
 

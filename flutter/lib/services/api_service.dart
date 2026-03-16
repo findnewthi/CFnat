@@ -9,6 +9,11 @@ class ApiService extends ChangeNotifier {
   bool _connected = false;
   bool _isLoading = false;
   StreamSubscription<String>? _streamSubscription;
+  Client? _streamClient;
+  int _streamGeneration = 0;
+  Timer? _reconnectTimer;
+  Timer? _statusPollTimer;
+  bool _statusPollInFlight = false;
 
   StatusData? get status => _status;
   ConfigData? get config => _config;
@@ -18,6 +23,7 @@ class ApiService extends ChangeNotifier {
 
   ApiService() {
     _startStreaming();
+    _startStatusPolling();
   }
 
   void _handleDisconnect() {
@@ -26,18 +32,57 @@ class ApiService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 1), _startStreaming);
+  }
+
+  void _startStatusPolling() {
+    _statusPollTimer?.cancel();
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _pollStatus();
+    });
+  }
+
+  Future<void> _pollStatus() async {
+    if (_statusPollInFlight) {
+      return;
+    }
+    _statusPollInFlight = true;
+    try {
+      final response = await get(Uri.parse('/api/status'));
+      if (response.statusCode == 200) {
+        _status = StatusData.fromJson(json.decode(response.body));
+        _connected = true;
+        notifyListeners();
+      }
+    } catch (_) {
+    } finally {
+      _statusPollInFlight = false;
+    }
+  }
+
   void _startStreaming() async {
+    final generation = ++_streamGeneration;
     try {
       final client = Client();
+      _streamClient = client;
       final request = Request('GET', Uri.parse('/api/stream'));
       
       final response = await client.send(request);
+      if (generation != _streamGeneration) {
+        client.close();
+        return;
+      }
       
       _streamSubscription = response.stream
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen(
             (line) {
+              if (generation != _streamGeneration) {
+                return;
+              }
               if (line.isNotEmpty && line.startsWith('data: ')) {
                 try {
                   final jsonStr = line.substring(6);
@@ -57,27 +102,54 @@ class ApiService extends ChangeNotifier {
               }
             },
             onError: (e) {
+              if (generation != _streamGeneration) {
+                return;
+              }
               debugPrint('SSE连接错误: $e');
               _handleDisconnect();
-              Future.delayed(const Duration(seconds: 1), _startStreaming);
+              _scheduleReconnect();
             },
             onDone: () {
+              if (generation != _streamGeneration) {
+                return;
+              }
               debugPrint('SSE连接关闭');
               _handleDisconnect();
-              Future.delayed(const Duration(seconds: 1), _startStreaming);
+              _scheduleReconnect();
             },
           );
     } catch (e) {
       debugPrint('启动SSE失败: $e');
       _handleDisconnect();
-      Future.delayed(const Duration(seconds: 1), _startStreaming);
+      _scheduleReconnect();
     }
   }
 
   @override
   void dispose() {
+    _reconnectTimer?.cancel();
+    _statusPollTimer?.cancel();
     _streamSubscription?.cancel();
+    _streamClient?.close();
     super.dispose();
+  }
+
+  Future<void> _restartStreaming() async {
+    _streamGeneration++;
+    _reconnectTimer?.cancel();
+    await _streamSubscription?.cancel();
+    _streamClient?.close();
+    _streamSubscription = null;
+    _streamClient = null;
+    _startStreaming();
+  }
+
+  Future<void> _warmupRefresh() async {
+    await fetchStatus();
+    await Future.delayed(const Duration(milliseconds: 700));
+    await fetchStatus();
+    await Future.delayed(const Duration(milliseconds: 1200));
+    await fetchStatus();
   }
 
   Future<void> fetchStatus() async {
@@ -146,7 +218,13 @@ class ApiService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final result = json.decode(response.body);
-        return result['success'] == true;
+        final success = result['success'] == true;
+        if (success) {
+          await _restartStreaming();
+          await fetchConfig();
+          await _warmupRefresh();
+        }
+        return success;
       }
       return false;
     } catch (e) {
@@ -160,7 +238,15 @@ class ApiService extends ChangeNotifier {
       final response = await post(Uri.parse('/api/stop'));
       if (response.statusCode == 200) {
         final result = json.decode(response.body);
-        return result['success'] == true;
+        final success = result['success'] == true;
+        if (success) {
+          _status = StatusData.stopped();
+          notifyListeners();
+          await fetchStatus();
+          await _restartStreaming();
+          await fetchStatus();
+        }
+        return success;
       }
       return false;
     } catch (e) {
@@ -194,6 +280,21 @@ class StatusData {
     required this.primaryIps,
     required this.backupIps,
   });
+
+  factory StatusData.stopped() {
+    return StatusData(
+      running: false,
+      nextHealthCheck: 0,
+      healthCheckInterval: 25,
+      primaryCount: 0,
+      primaryTarget: 0,
+      backupCount: 0,
+      backupTarget: 0,
+      stickyIps: const [],
+      primaryIps: const [],
+      backupIps: const [],
+    );
+  }
 
   factory StatusData.fromJson(Map<String, dynamic> json) {
     return StatusData(

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::sync::CancellationToken;
 
 use crate::core::loadbalancer::LoadBalancer;
 
@@ -108,6 +109,7 @@ pub async fn run_forward(
     lb: Arc<LoadBalancer>,
     tls_port: u16,
     http_port: u16,
+    cancel_token: CancellationToken,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
 
@@ -115,11 +117,20 @@ pub async fn run_forward(
         listen_addr, tls_port, http_port, lb.get_primary_count(), lb.get_backup_count());
 
     loop {
-        let (client, _) = listener.accept().await?;
-
-        let lb = lb.clone();
-        tokio::spawn(async move {
-            if let Err(_e) = handle_client(client, lb, tls_port, http_port).await {}
-        });
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (client, _) = accept_result?;
+                let lb = lb.clone();
+                tokio::spawn(async move {
+                    if let Err(_e) = handle_client(client, lb, tls_port, http_port).await {}
+                });
+            }
+            _ = cancel_token.cancelled() => {
+                println!("[转发服务] 收到停止信号，退出");
+                break;
+            }
+        }
     }
+
+    Ok(())
 }

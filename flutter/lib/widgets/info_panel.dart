@@ -12,39 +12,7 @@ class InfoPanel extends StatefulWidget {
   State<InfoPanel> createState() => _InfoPanelState();
 }
 
-class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMixin {
-  late AnimationController _progressController;
-  double _targetProgress = 1.0;
-  double _displayedProgress = 1.0;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 1),
-    )..addListener(() {
-        setState(() {
-          _displayedProgress = _displayedProgress + 
-              (_targetProgress - _displayedProgress) * _progressController.value;
-        });
-      });
-  }
-
-  @override
-  void dispose() {
-    _progressController.dispose();
-    super.dispose();
-  }
-
-  void _updateProgress(double newProgress) {
-    if ((_targetProgress - newProgress).abs() > 0.01) {
-      _displayedProgress = _targetProgress;
-      _targetProgress = newProgress;
-      _progressController.forward(from: 0);
-    }
-  }
-
+class _InfoPanelState extends State<InfoPanel> {
   @override
   Widget build(BuildContext context) {
     return Consumer<ApiService>(
@@ -61,76 +29,107 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
         return LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth > 600 && !widget.forceVertical;
+            final canSplitVertical = constraints.maxHeight >= 720;
             
-            final progress = status.healthCheckInterval > 0
-                ? status.nextHealthCheck / status.healthCheckInterval
-                : 0.0;
-            _updateProgress(progress.clamp(0.0, 1.0));
-            
-            return Column(
-              children: [
-                _buildHealthCheckBar(status, constraints),
-                const Divider(height: 1),
-                Expanded(
-                  child: isWide
-                      ? Row(
-                          children: [
-                            Expanded(
-                              child: _buildIpList(
-                                '负载均衡',
-                                status.primaryIps,
-                                status.primaryCount,
-                                status.primaryTarget,
-                                Colors.green,
-                                status.stickyIps,
-                                constraints,
+            return Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  _buildHealthCheckBar(status, constraints),
+                  const SizedBox(height: 10),
+                  _buildSummaryChips(status),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: isWide
+                        ? Row(
+                            children: [
+                              Expanded(
+                                child: _buildIpList(
+                                  '负载均衡',
+                                  status.primaryIps,
+                                  status.primaryCount,
+                                  status.primaryTarget,
+                                  Colors.green,
+                                  status.stickyIps,
+                                  constraints,
+                                ),
                               ),
-                            ),
-                            const VerticalDivider(width: 1),
-                            Expanded(
-                              child: _buildIpList(
-                                '备选列表',
-                                status.backupIps,
-                                status.backupCount,
-                                status.backupTarget,
-                                Colors.blue,
-                                status.stickyIps,
-                                constraints,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _buildIpList(
+                                  '备选列表',
+                                  status.backupIps,
+                                  status.backupCount,
+                                  status.backupTarget,
+                                  Colors.blue,
+                                  status.stickyIps,
+                                  constraints,
+                                ),
                               ),
-                            ),
-                          ],
-                        )
-                      : Column(
-                          children: [
-                            Expanded(
-                              flex: (status.primaryCount + status.primaryTarget).clamp(1, 100),
-                              child: _buildIpList(
-                                '负载均衡',
-                                status.primaryIps,
-                                status.primaryCount,
-                                status.primaryTarget,
-                                Colors.green,
-                                status.stickyIps,
-                                constraints,
+                            ],
+                          )
+                        : canSplitVertical
+                            ? Column(
+                                children: [
+                                  Expanded(
+                                    flex: (status.primaryCount + status.primaryTarget).clamp(1, 100),
+                                    child: _buildIpList(
+                                      '负载均衡',
+                                      status.primaryIps,
+                                      status.primaryCount,
+                                      status.primaryTarget,
+                                      Colors.green,
+                                      status.stickyIps,
+                                      constraints,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Expanded(
+                                    flex: (status.backupCount + status.backupTarget).clamp(1, 100),
+                                    child: _buildIpList(
+                                      '备选列表',
+                                      status.backupIps,
+                                      status.backupCount,
+                                      status.backupTarget,
+                                      Colors.blue,
+                                      status.stickyIps,
+                                      constraints,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : ListView(
+                                children: [
+                                  SizedBox(
+                                    height: 360,
+                                    child: _buildIpList(
+                                      '负载均衡',
+                                      status.primaryIps,
+                                      status.primaryCount,
+                                      status.primaryTarget,
+                                      Colors.green,
+                                      status.stickyIps,
+                                      constraints,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  SizedBox(
+                                    height: 360,
+                                    child: _buildIpList(
+                                      '备选列表',
+                                      status.backupIps,
+                                      status.backupCount,
+                                      status.backupTarget,
+                                      Colors.blue,
+                                      status.stickyIps,
+                                      constraints,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                            const Divider(height: 1),
-                            Expanded(
-                              flex: (status.backupCount + status.backupTarget).clamp(1, 100),
-                              child: _buildIpList(
-                                '备选列表',
-                                status.backupIps,
-                                status.backupCount,
-                                status.backupTarget,
-                                Colors.blue,
-                                status.stickyIps,
-                                constraints,
-                              ),
-                            ),
-                          ],
-                        ),
-                ),
-              ],
+                  ),
+                ],
+              ),
             );
           },
         );
@@ -159,54 +158,66 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
     );
   }
 
-  Widget _buildHealthCheckBar(StatusData status, BoxConstraints constraints) {
-    final padding = constraints.maxWidth > 600 ? 16.0 : 12.0;
-    final fontSize = constraints.maxWidth > 400 ? 13.0 : 12.0;
-    
-    if (!status.running) {
-      return Container(
-        padding: EdgeInsets.all(padding),
+  Widget _buildSummaryChips(StatusData status) {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildSummaryCard(
+            title: '主队列',
+            value: '${status.primaryCount}/${status.primaryTarget}',
+            color: Colors.green,
+            icon: Icons.track_changes,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _buildSummaryCard(
+            title: '备选',
+            value: '${status.backupCount}/${status.backupTarget}',
+            color: Colors.blue,
+            icon: Icons.layers,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryCard({
+    required String title,
+    required String value,
+    required Color color,
+    required IconData icon,
+  }) {
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.pause_circle, color: Colors.orange[400], size: fontSize + 7),
-            SizedBox(width: padding / 2),
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(color: Colors.grey[400], fontSize: 12),
+              ),
+            ),
             Text(
-              '服务已停止',
-              style: TextStyle(color: Colors.orange[400], fontWeight: FontWeight.w500, fontSize: fontSize),
+              value,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ],
         ),
-      );
-    }
-
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: padding, vertical: padding / 2),
-      child: Row(
-        children: [
-          Icon(Icons.health_and_safety, size: fontSize + 5, color: Colors.lightBlue),
-          SizedBox(width: padding / 2),
-          Text(
-            '健康检查',
-            style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w500),
-          ),
-          SizedBox(width: padding),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: _displayedProgress.clamp(0.0, 1.0),
-                backgroundColor: Colors.grey[700],
-                valueColor: AlwaysStoppedAnimation(
-                  _displayedProgress > 0.3 ? Colors.lightBlue : Colors.orange,
-                ),
-                minHeight: 8,
-              ),
-            ),
-          ),
-        ],
       ),
     );
+  }
+
+  Widget _buildHealthCheckBar(StatusData status, BoxConstraints constraints) {
+    return const SizedBox.shrink();
   }
 
   Widget _buildIpList(
@@ -223,13 +234,16 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
     final ipSize = constraints.maxWidth > 400 ? 13.0 : 12.0;
     final headerSize = constraints.maxWidth > 400 ? 11.0 : 10.0;
     
-    return Column(
-      children: [
+    return Card(
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
         Container(
           padding: EdgeInsets.symmetric(horizontal: padding, vertical: padding * 0.7),
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.15),
-            border: Border(bottom: BorderSide(color: Colors.grey[700]!)),
+            border: Border(bottom: BorderSide(color: Colors.grey[800]!)),
           ),
           child: Row(
             children: [
@@ -263,8 +277,8 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
         Container(
           padding: EdgeInsets.symmetric(horizontal: padding, vertical: padding * 0.5),
           decoration: BoxDecoration(
-            color: Colors.grey[850],
-            border: Border(bottom: BorderSide(color: Colors.grey[700]!)),
+            color: Colors.grey[900],
+            border: Border(bottom: BorderSide(color: Colors.grey[800]!)),
           ),
           child: Row(
             children: [
@@ -293,13 +307,15 @@ class _InfoPanelState extends State<InfoPanel> with SingleTickerProviderStateMix
                   child: Text('暂无数据', style: TextStyle(color: Colors.grey[500], fontSize: ipSize)),
                 )
               : ListView.builder(
+                  key: ValueKey('$title-$count-$target-${ips.length}-${stickyIps.length}'),
                   itemCount: ips.length,
                   itemBuilder: (context, index) {
                     return _buildIpRow(ips[index], stickyIps, padding, ipSize);
                   },
                 ),
         ),
-      ],
+        ],
+      ),
     );
   }
 

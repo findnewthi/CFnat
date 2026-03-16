@@ -27,6 +27,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
   bool _initialized = false;
   bool _isRunning = false;
   bool _connected = false;
+  bool _actionInProgress = false;
 
   @override
   void initState() {
@@ -405,16 +406,19 @@ class _ConfigPanelState extends State<ConfigPanel> {
       return SizedBox(
         width: double.infinity,
         child: ElevatedButton.icon(
-          onPressed: () async {
-            final success = await widget.api.stopService();
-            if (!success && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('停止服务失败')),
-              );
-            }
-          },
-          icon: const Icon(Icons.stop, size: 18),
-          label: const Text('停止'),
+          onPressed: _actionInProgress
+              ? null
+              : () async {
+                  await _runAction(() => widget.api.stopService(), '停止');
+                },
+          icon: _actionInProgress
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.stop, size: 18),
+          label: Text(_actionInProgress ? '停止中...' : '停止'),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red[700],
             foregroundColor: Colors.white,
@@ -427,39 +431,63 @@ class _ConfigPanelState extends State<ConfigPanel> {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: () async {
-          final success = await widget.api.startService(
-            ipFile: _speedTestFileController.text.isNotEmpty 
-                ? _speedTestFileController.text : null,
-            http: _testAddressController.text.isNotEmpty 
-                ? _testAddressController.text : null,
-            delayLimit: int.tryParse(_delayLimitController.text),
-            tlr: double.tryParse(_tlrController.text),
-            ips: int.tryParse(_loadCountController.text),
-            threads: int.tryParse(_maxConcurrencyController.text),
-            tlsPort: int.tryParse(_tlsPortController.text),
-            httpPort: int.tryParse(_httpPortController.text),
-            colo: _dataCenterController.text.isNotEmpty
-                ? _dataCenterController.text.split(',').map((e) => e.trim()).toList()
-                : null,
-            listenAddr: _localServiceController.text.isNotEmpty 
-                ? _localServiceController.text : null,
-          );
-          
-          if (!success && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('启动服务失败')),
-            );
-          }
-        },
-        icon: const Icon(Icons.play_arrow, size: 18),
-        label: const Text('启动'),
+        onPressed: _actionInProgress
+            ? null
+            : () async {
+                await _runAction(
+                  () => widget.api.startService(
+                    ipFile: _speedTestFileController.text.isNotEmpty 
+                        ? _speedTestFileController.text : null,
+                    http: _testAddressController.text.isNotEmpty 
+                        ? _testAddressController.text : null,
+                    delayLimit: int.tryParse(_delayLimitController.text),
+                    tlr: double.tryParse(_tlrController.text),
+                    ips: int.tryParse(_loadCountController.text),
+                    threads: int.tryParse(_maxConcurrencyController.text),
+                    tlsPort: int.tryParse(_tlsPortController.text),
+                    httpPort: int.tryParse(_httpPortController.text),
+                    colo: _dataCenterController.text.isNotEmpty
+                        ? _dataCenterController.text.split(',').map((e) => e.trim()).toList()
+                        : null,
+                    listenAddr: _localServiceController.text.isNotEmpty 
+                        ? _localServiceController.text : null,
+                  ),
+                  '启动',
+                );
+              },
+        icon: _actionInProgress
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.play_arrow, size: 18),
+        label: Text(_actionInProgress ? '启动中...' : '启动'),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.green[700],
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 12),
         ),
       ),
+    );
+  }
+
+  Future<void> _runAction(Future<bool> Function() action, String label) async {
+    if (_actionInProgress || !mounted) {
+      return;
+    }
+    setState(() {
+      _actionInProgress = true;
+    });
+    final success = await action();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _actionInProgress = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(success ? '$label成功' : '$label失败')),
     );
   }
 }

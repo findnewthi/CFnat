@@ -25,20 +25,14 @@ class _MainScreenState extends State<MainScreen> {
             builder: (context, constraints) {
               final width = constraints.maxWidth;
               final height = constraints.maxHeight;
-              final aspectRatio = width / height;
-              
-              final isWide = width > 900;
-              final isNarrow = width < 600;
-              
-              if (isWide) {
-                return _buildWideLayout(api, width);
+              final isNarrow = width < 680 || (width < 900 && height < 540);
+
+              if (isNarrow) {
+                return _buildNarrowLayout(api);
               }
-              
-              if (isNarrow || aspectRatio < 0.8) {
-                return _buildNarrowLayout(api, width, height);
-              }
-              
-              return _buildMediumLayout(api, width, height);
+
+              // 宽屏：使用 Flexible 让两个面板自适应宽度
+              return _buildFlexibleLayout(api);
             },
           );
         },
@@ -46,50 +40,56 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildWideLayout(ApiService api, double width) {
-    final configWidth = (width * 0.28).clamp(280.0, 360.0);
-    
-    return Row(
-      children: [
-        SizedBox(
-          width: configWidth,
-          child: ConfigPanel(api: api),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: InfoPanel(api: api),
-        ),
-      ],
+  Widget _buildNarrowLayout(ApiService api) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final dividerColor = Theme.of(context).dividerColor;
+
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: colorScheme.surface.withValues(alpha: 0.35),
+              border: Border(bottom: BorderSide(color: dividerColor)),
+            ),
+            child: const TabBar(
+              tabs: [
+                Tab(text: '配置'),
+                Tab(text: '列表'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                ConfigPanel(api: api, compact: true),
+                InfoPanel(api: api, forceVertical: true),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildNarrowLayout(ApiService api, double width, double height) {
-    return Column(
-      children: [
-        Expanded(
-          flex: 45,
-          child: ConfigPanel(api: api, compact: true),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          flex: 55,
-          child: InfoPanel(api: api, forceVertical: true),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMediumLayout(ApiService api, double width, double height) {
-    final configWidth = (width * 0.35).clamp(260.0, 340.0);
-    
+  Widget _buildFlexibleLayout(ApiService api) {
     return Row(
       children: [
-        SizedBox(
-          width: configWidth,
-          child: ConfigPanel(api: api),
+        Flexible(
+          flex: 3,
+          fit: FlexFit.loose,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minWidth: 320,
+              maxWidth: 450,
+            ),
+            child: ConfigPanel(api: api),
+          ),
         ),
         const VerticalDivider(width: 1),
-        Expanded(
+        Flexible(
+          flex: 7,
           child: InfoPanel(api: api),
         ),
       ],

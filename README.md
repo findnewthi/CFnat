@@ -7,6 +7,10 @@ Cloudflare IP 延迟优选 + 负载均衡转发工具
 - 使用本项目代码或程序时，必须严格遵守所在地区的法律法规。
 - 对使用本软件由此产生的任何后果完全自负。
 
+# 演示图
+
+[演示图](https://raw.githubusercontent.com/GuangYu-yu/CFnat/refs/heads/main/png/前端.png)
+
 ## 参数说明
 
 | 参数 | 说明 | 默认值 |

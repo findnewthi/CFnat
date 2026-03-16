@@ -12,8 +12,6 @@ class ApiService extends ChangeNotifier {
   Client? _streamClient;
   int _streamGeneration = 0;
   Timer? _reconnectTimer;
-  Timer? _statusPollTimer;
-  bool _statusPollInFlight = false;
 
   StatusData? get status => _status;
   ConfigData? get config => _config;
@@ -23,7 +21,6 @@ class ApiService extends ChangeNotifier {
 
   ApiService() {
     _startStreaming();
-    _startStatusPolling();
   }
 
   void _handleDisconnect() {
@@ -35,31 +32,6 @@ class ApiService extends ChangeNotifier {
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 1), _startStreaming);
-  }
-
-  void _startStatusPolling() {
-    _statusPollTimer?.cancel();
-    _statusPollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      _pollStatus();
-    });
-  }
-
-  Future<void> _pollStatus() async {
-    if (_statusPollInFlight) {
-      return;
-    }
-    _statusPollInFlight = true;
-    try {
-      final response = await get(Uri.parse('/api/status'));
-      if (response.statusCode == 200) {
-        _status = StatusData.fromJson(json.decode(response.body));
-        _connected = true;
-        notifyListeners();
-      }
-    } catch (_) {
-    } finally {
-      _statusPollInFlight = false;
-    }
   }
 
   void _startStreaming() async {
@@ -128,7 +100,6 @@ class ApiService extends ChangeNotifier {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
-    _statusPollTimer?.cancel();
     _streamSubscription?.cancel();
     _streamClient?.close();
     super.dispose();
@@ -142,14 +113,6 @@ class ApiService extends ChangeNotifier {
     _streamSubscription = null;
     _streamClient = null;
     _startStreaming();
-  }
-
-  Future<void> _warmupRefresh() async {
-    await fetchStatus();
-    await Future.delayed(const Duration(milliseconds: 700));
-    await fetchStatus();
-    await Future.delayed(const Duration(milliseconds: 1200));
-    await fetchStatus();
   }
 
   Future<void> fetchStatus() async {
@@ -222,7 +185,6 @@ class ApiService extends ChangeNotifier {
         if (success) {
           await _restartStreaming();
           await fetchConfig();
-          await _warmupRefresh();
         }
         return success;
       }
@@ -242,9 +204,7 @@ class ApiService extends ChangeNotifier {
         if (success) {
           _status = StatusData.stopped();
           notifyListeners();
-          await fetchStatus();
           await _restartStreaming();
-          await fetchStatus();
         }
         return success;
       }

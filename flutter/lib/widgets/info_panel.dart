@@ -15,13 +15,14 @@ class InfoPanel extends StatefulWidget {
 class _InfoPanelState extends State<InfoPanel> {
   @override
   Widget build(BuildContext context) {
-    return Consumer<ApiService>(
-      builder: (context, api, child) {
-        if (!api.connected) {
+    return Selector<ApiService, (StatusData?, bool)>(
+      selector: (_, api) => (api.status, api.connected),
+      builder: (context, data, child) {
+        final (status, connected) = data;
+        if (!connected) {
           return _buildDisconnectedState();
         }
 
-        final status = api.status;
         if (status == null) {
           return const Center(child: CircularProgressIndicator());
         }

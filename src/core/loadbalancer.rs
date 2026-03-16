@@ -33,8 +33,8 @@ pub struct LoadBalancer {
     backup: RwLock<Vec<Arc<Backend>>>,
     backup_index: AtomicUsize,
     ip_set: RwLock<HashSet<std::net::IpAddr>>,
-    primary_target: RwLock<usize>,
-    backup_target: RwLock<usize>,
+    primary_target: AtomicUsize,
+    backup_target: AtomicUsize,
     min_active_target: usize,
     health_check_url: String,
     tls_port: u16,
@@ -69,8 +69,8 @@ impl LoadBalancer {
             backup: RwLock::new(Vec::new()),
             backup_index: AtomicUsize::new(0),
             ip_set: RwLock::new(HashSet::new()),
-            primary_target: RwLock::new(primary_target),
-            backup_target: RwLock::new(backup_target),
+            primary_target: AtomicUsize::new(primary_target),
+            backup_target: AtomicUsize::new(backup_target),
             min_active_target,
             health_check_url: String::new(),
             tls_port: 443,
@@ -102,8 +102,8 @@ impl LoadBalancer {
         let primary_count = self.get_primary_count();
         let backup_count = self.get_backup_count();
         
-        let primary_target = *self.primary_target.read();
-        let backup_target = *self.backup_target.read();
+        let primary_target = self.primary_target.load(Ordering::Relaxed);
+        let backup_target = self.backup_target.load(Ordering::Relaxed);
         
         let colo_string = colo.map(|s| s.to_string());
         
@@ -170,11 +170,11 @@ impl LoadBalancer {
     }
 
     pub fn primary_full(&self) -> bool {
-        self.get_primary_count() >= *self.primary_target.read()
+        self.get_primary_count() >= self.primary_target.load(Ordering::Relaxed)
     }
 
     pub fn backup_full(&self) -> bool {
-        self.get_backup_count() >= *self.backup_target.read()
+        self.get_backup_count() >= self.backup_target.load(Ordering::Relaxed)
     }
 
     pub fn should_pause(&self) -> bool {
@@ -372,7 +372,7 @@ impl LoadBalancer {
             self.primary.read().len()
         };
 
-        let primary_target = *self.primary_target.read();
+        let primary_target = self.primary_target.load(Ordering::Relaxed);
 
         if primary_len < primary_target {
             let mut backup = self.backup.write();
@@ -400,11 +400,11 @@ impl LoadBalancer {
     }
 
     pub fn get_primary_target(&self) -> usize {
-        *self.primary_target.read()
+        self.primary_target.load(Ordering::Relaxed)
     }
 
     pub fn get_backup_target(&self) -> usize {
-        *self.backup_target.read()
+        self.backup_target.load(Ordering::Relaxed)
     }
 
     pub fn update_delay_threshold(&self, delay_threshold: f32) {
@@ -418,11 +418,9 @@ impl LoadBalancer {
     }
 
     pub fn update_primary_target(&self, primary_target: usize) {
-        let mut target = self.primary_target.write();
-        *target = primary_target;
+        self.primary_target.store(primary_target, Ordering::Relaxed);
         let backup_target = ((primary_target as f32 * 0.5).ceil() as usize).min(get_global_config().max_backup_target).max(2);
-        let mut backup_target_mut = self.backup_target.write();
-        *backup_target_mut = backup_target;
+        self.backup_target.store(backup_target, Ordering::Relaxed);
     }
 
     pub fn add_to_primary(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>) {

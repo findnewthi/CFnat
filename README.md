@@ -9,7 +9,7 @@ Cloudflare IP 延迟优选 + 负载均衡转发工具
 
 # 演示图
 
-[演示图](https://raw.githubusercontent.com/GuangYu-yu/CFnat/refs/heads/main/png/前端.png)
+<img alt="演示图" src="https://raw.githubusercontent.com/GuangYu-yu/CFnat/refs/heads/main/png/前端.png" />
 
 ## 参数说明
 

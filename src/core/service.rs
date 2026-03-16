@@ -168,11 +168,11 @@ impl ServiceState {
             return Err("服务未运行".to_string());
         }
 
-        if let Some(lb) = self.loadbalancer.read().clone() {
+        if let Some(lb) = self.loadbalancer.read().as_ref() {
             lb.stop();
         }
 
-        if let Some(token) = self.cancel_token.read().clone() {
+        if let Some(token) = self.cancel_token.read().as_ref() {
             token.cancel();
         }
         

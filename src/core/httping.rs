@@ -169,18 +169,7 @@ pub async fn run_continuous_httping(
     let concurrency = GLOBAL_LIMITER.get().unwrap().max_concurrent();
     let mut tasks: JoinSet<PingResult> = JoinSet::new();
 
-    let spawn_task = |ip: std::net::IpAddr, cfg: &PingConfig| {
-        let cfg = PingConfig {
-            tls_port: cfg.tls_port,
-            http_port: cfg.http_port,
-            client: cfg.client.clone(),
-            host: cfg.host.clone(),
-            scheme: cfg.scheme.clone(),
-            path: cfg.path.clone(),
-            timeout_ms: cfg.timeout_ms,
-            colo_filter: cfg.colo_filter.clone(),
-        };
-
+    let spawn_task = |ip: std::net::IpAddr, cfg: PingConfig| {
         async move { 
             http_ping_multi(ip, &cfg).await.map(|r| (r.addr, r.delay, r.colo, r.success_count, r.colo_mismatch))
         }
@@ -231,7 +220,7 @@ pub async fn run_continuous_httping(
                 continue;
             }
 
-            tasks.spawn(spawn_task(ip, &ping_config));
+            tasks.spawn(spawn_task(ip, ping_config.clone()));
         }
 
         tokio::select! {

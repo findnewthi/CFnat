@@ -75,6 +75,63 @@ pub struct StatusResponse {
     pub backup_ips: Vec<IpInfo>,
 }
 
+pub struct StatusInfo {
+    pub primary_count: usize,
+    pub primary_target: usize,
+    pub backup_count: usize,
+    pub backup_target: usize,
+    pub primary_ips: Vec<IpInfo>,
+    pub backup_ips: Vec<IpInfo>,
+    pub next_health_check: u64,
+    pub sticky_ips: Vec<String>,
+}
+
+impl StatusInfo {
+    pub fn from_loadbalancer(lb: &crate::core::loadbalancer::LoadBalancer) -> Self {
+        let primary_backends = lb.get_primary_backends();
+        let backup_backends = lb.get_backup_backends();
+        
+        let primary_ips: Vec<IpInfo> = primary_backends
+            .iter()
+            .map(IpInfo::from_backend)
+            .collect();
+        
+        let backup_ips: Vec<IpInfo> = backup_backends
+            .iter()
+            .map(IpInfo::from_backend)
+            .collect();
+        
+        let sticky_ips: Vec<String> = lb.get_sticky_ips()
+            .into_iter()
+            .map(|ip| ip.to_string())
+            .collect();
+        
+        Self {
+            primary_count: lb.get_primary_count(),
+            primary_target: lb.get_primary_target(),
+            backup_count: lb.get_backup_count(),
+            backup_target: lb.get_backup_target(),
+            primary_ips,
+            backup_ips,
+            next_health_check: lb.get_next_health_check_secs(),
+            sticky_ips,
+        }
+    }
+    
+    pub fn empty() -> Self {
+        Self {
+            primary_count: 0,
+            primary_target: 0,
+            backup_count: 0,
+            backup_target: 0,
+            primary_ips: vec![],
+            backup_ips: vec![],
+            next_health_check: 0,
+            sticky_ips: vec![],
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct IpInfo {
     pub ip: String,

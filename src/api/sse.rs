@@ -8,13 +8,12 @@ use axum::{
 use serde::Serialize;
 use tokio_stream::StreamExt;
 
-use super::{AppState, StatusResponse, IpInfo};
-use crate::api::handlers::ConfigResponse;
+use super::{AppState, StatusResponse, StatusInfo, ServerConfig};
 
 #[derive(Serialize)]
 struct StreamUpdate {
     status: StatusResponse,
-    config: ConfigResponse,
+    config: ServerConfig,
 }
 
 pub async fn stream_updates(
@@ -25,67 +24,28 @@ pub async fn stream_updates(
             let service = &state.service;
             let running = service.is_running();
             
-            let (primary_count, primary_target, backup_count, backup_target, primary_ips, backup_ips, next_health_check, sticky_ips) = 
-                if let Some(lb) = service.get_loadbalancer() {
-                    let primary_backends = lb.get_primary_backends();
-                    let backup_backends = lb.get_backup_backends();
-                    
-                    let primary_ips: Vec<IpInfo> = primary_backends
-                        .iter()
-                        .map(IpInfo::from_backend)
-                        .collect();
-                    
-                    let backup_ips: Vec<IpInfo> = backup_backends
-                        .iter()
-                        .map(IpInfo::from_backend)
-                        .collect();
-                    
-                    let sticky_ips: Vec<String> = lb.get_sticky_ips()
-                        .into_iter()
-                        .map(|ip| ip.to_string())
-                        .collect();
-                    
-                    (
-                        lb.get_primary_count(),
-                        lb.get_primary_target(),
-                        lb.get_backup_count(),
-                        lb.get_backup_target(),
-                        primary_ips,
-                        backup_ips,
-                        lb.get_next_health_check_secs(),
-                        sticky_ips,
-                    )
-                } else {
-                    (0, 0, 0, 0, vec![], vec![], 0, vec![])
-                };
+            let info = if let Some(lb) = service.get_loadbalancer() {
+                StatusInfo::from_loadbalancer(&lb)
+            } else {
+                StatusInfo::empty()
+            };
             
             let config = service.get_config();
             
             let status = StatusResponse {
                 running,
-                next_health_check,
+                next_health_check: info.next_health_check,
                 health_check_interval: crate::core::config::get_global_config().health_check_interval.as_secs(),
-                primary_count,
-                primary_target,
-                backup_count,
-                backup_target,
-                sticky_ips,
-                primary_ips,
-                backup_ips,
+                primary_count: info.primary_count,
+                primary_target: info.primary_target,
+                backup_count: info.backup_count,
+                backup_target: info.backup_target,
+                sticky_ips: info.sticky_ips,
+                primary_ips: info.primary_ips,
+                backup_ips: info.backup_ips,
             };
             
-            let config_resp = ConfigResponse {
-                addr: config.listen_addr,
-                delay_limit: config.delay_limit,
-                tlr: config.tlr,
-                ips: config.ips,
-                threads: config.threads,
-                tls_port: config.tls_port,
-                http_port: config.http_port,
-                colo: config.colo,
-                http: config.http,
-                ip_file: config.ip_file,
-            };
+            let config_resp = ServerConfig::from(config);
             
             let update = StreamUpdate {
                 status,

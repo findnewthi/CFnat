@@ -302,13 +302,16 @@ impl LoadBalancer {
         let mut primary = self.primary.write();
         let before = primary.len();
         primary.retain(|b| !b.is_removed());
+        let primary_removed = before - primary.len();
         drop(primary);
 
         let mut backup = self.backup.write();
+        let backup_before = backup.len();
         backup.retain(|b| !b.is_removed());
+        let backup_removed = backup_before - backup.len();
         drop(backup);
 
-        let removed_count = before - self.primary.read().len();
+        let removed_count = primary_removed + backup_removed;
         if removed_count > 0 {
             println!("[-] 清理 {} 个失效节点", removed_count);
         }

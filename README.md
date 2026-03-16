@@ -33,6 +33,9 @@ Cloudflare IP 延迟优选 + 负载均衡转发工具
 ## 示例
 
 ```bash
+
+curl -OL https://github.com/GuangYu-yu/CFnat/raw/refs/heads/main/binaries/Linux_ARM64/CFnat && chmod +x CFnat
+
 # 基本使用
 ./CFnat -f ip.txt
 

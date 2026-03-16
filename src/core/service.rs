@@ -41,7 +41,7 @@ impl Default for ServiceConfig {
             tls_port: 443,
             http_port: 80,
             colo: None,
-            listen_addr: "127.6.6.6:6".parse().unwrap(),
+            listen_addr: "127.6.6.6:1234".parse().unwrap(),
             api_addr: "127.0.0.1:0".parse().unwrap(),
         }
     }

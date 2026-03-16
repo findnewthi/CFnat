@@ -178,7 +178,7 @@ fn format_help_line(name: &str, desc: &str, default: &str) -> String {
 
 pub fn print_help() {
     const HELP_ARGS: &[(&str, &str, &str)] = &[
-        ("-addr", "本地监听的 IP 和端口", "127.6.6.6:6"),
+        ("-addr", "本地监听的 IP 和端口", "127.6.6.6:1234"),
         ("-api", "API 服务地址和端口，端口 0 自动分配", "127.0.0.1:0"),
         ("-colo", "筛选一个或多个数据中心，例如 HKG,LAX", "未指定"),
         ("-dl", "有效连接的平均延迟上限（毫秒）", "500"),

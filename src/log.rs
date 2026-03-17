@@ -1,10 +1,21 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::RwLock;
 use serde::Serialize;
-use chrono::Local;
 
 const MAX_LOG_ENTRIES: usize = 500;
+
+fn format_time() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = duration.as_secs() % 86400;
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let secs = secs % 60;
+    format!("{:02}:{:02}:{:02}", hours, mins, secs)
+}
 
 #[derive(Clone, Serialize)]
 pub struct LogEntry {
@@ -26,7 +37,7 @@ impl LogBuffer {
 
     pub fn push(&self, level: &str, message: &str) {
         let entry = LogEntry {
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            timestamp: format_time(),
             level: level.to_string(),
             message: message.to_string(),
         };

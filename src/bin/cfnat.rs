@@ -52,7 +52,7 @@ async fn main() {
     
     println!();
     println!("使用方式:");
-    println!("  1. 按 Enter 使用默认配置启动");
+    println!("  1. 按 Enter 启动");
     println!("  2. 输入参数启动");
     println!("  3. 通过 Web 界面控制: http://{}", actual_addr);
     println!();
@@ -65,10 +65,11 @@ async fn main() {
     
     let should_start = if let Some(Ok(line)) = lines.next() {
         if line.trim().is_empty() {
-            println!("使用默认配置启动服务...");
+            println!("使用默认参数启动服务...");
             true
         } else if let Some(config) = Args::parse_line_to_config(&line) {
             service.update_config(config);
+            println!("使用传入参数启动服务...");
             true
         } else {
             println!("等待 Web 界面控制...");
@@ -88,6 +89,5 @@ async fn main() {
         }
     }
     
-    println!("按 Ctrl+C 退出...");
     tokio::signal::ctrl_c().await.ok();
 }

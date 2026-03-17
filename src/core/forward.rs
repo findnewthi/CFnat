@@ -113,8 +113,8 @@ pub async fn run_forward(
 ) -> io::Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
 
-    println!("转发服务 {} (TLS:{}, HTTP:{}) 主队列:{} 备选:{}", 
-        listen_addr, tls_port, http_port, lb.get_primary_count(), lb.get_backup_count());
+    println!("转发服务 {} (TLS:{}, HTTP:{})", 
+        listen_addr, tls_port, http_port);
 
     loop {
         tokio::select! {

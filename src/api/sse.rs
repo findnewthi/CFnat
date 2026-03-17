@@ -23,6 +23,7 @@ pub async fn stream_updates(
         .map(move |_| {
             let service = &state.service;
             let running = service.is_running();
+            let uptime_secs = service.get_uptime_secs();
             
             let info = if let Some(lb) = service.get_loadbalancer() {
                 StatusInfo::from_loadbalancer(&lb)
@@ -34,6 +35,7 @@ pub async fn stream_updates(
             
             let status = StatusResponse {
                 running,
+                uptime_secs,
                 next_health_check: info.next_health_check,
                 health_check_interval: crate::core::config::get_global_config().health_check_interval.as_secs(),
                 primary_count: info.primary_count,

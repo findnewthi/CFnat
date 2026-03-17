@@ -31,7 +31,6 @@ class _MainScreenState extends State<MainScreen> {
                 return _buildNarrowLayout(api);
               }
 
-              // 宽屏：使用 Flexible 让两个面板自适应宽度
               return _buildFlexibleLayout(api);
             },
           );

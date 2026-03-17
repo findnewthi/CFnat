@@ -7,6 +7,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::loadbalancer::LoadBalancer;
+use crate::log::push_log;
 
 const READABLE_TIMEOUT_SECS: u64 = 10;
 
@@ -95,7 +96,7 @@ async fn handle_client(
         let delay_threshold = lb.get_delay_threshold();
         lb.remove_backend(backend.clone());
         lb.refill_from_backup();
-        println!("[-] {} 延迟{:.0}ms>{:.0}ms (请求触发)", backend.addr, avg_delay, delay_threshold);
+        push_log("WARN", &format!("[-] {} 延迟{:.0}ms>{:.0}ms (请求触发)", backend.addr, avg_delay, delay_threshold));
     }
 
     lb.release(&backend);
@@ -113,8 +114,8 @@ pub async fn run_forward(
 ) -> io::Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
 
-    println!("转发服务 {} (TLS:{}, HTTP:{})", 
-        listen_addr, tls_port, http_port);
+    push_log("INFO", &format!("转发服务 {} (TLS:{}, HTTP:{})", 
+        listen_addr, tls_port, http_port));
 
     loop {
         tokio::select! {
@@ -126,7 +127,7 @@ pub async fn run_forward(
                 });
             }
             _ = cancel_token.cancelled() => {
-                println!("[转发服务] 收到停止信号，退出");
+                push_log("INFO", "[转发服务] 收到停止信号，退出");
                 break;
             }
         }

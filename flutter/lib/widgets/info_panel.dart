@@ -27,10 +27,15 @@ class _InfoPanelState extends State<InfoPanel> {
           return const Center(child: CircularProgressIndicator());
         }
 
+        if (!status.running) {
+          return _buildIdleState();
+        }
+
         return LayoutBuilder(
           builder: (context, constraints) {
-            final isWide = constraints.maxWidth > 600 && !widget.forceVertical;
-            final canSplitVertical = constraints.maxHeight >= 720;
+            const listMinWidth = 380.0;
+            final canFitTwo = constraints.maxWidth >= listMinWidth * 2 + 10 && !widget.forceVertical;
+            final canSplitVertical = constraints.maxHeight >= 600;
             
             return Padding(
               padding: const EdgeInsets.all(12),
@@ -39,7 +44,7 @@ class _InfoPanelState extends State<InfoPanel> {
                   _buildHealthCheckBar(status, constraints),
                   const SizedBox(height: 10),
                   Expanded(
-                    child: isWide
+                    child: canFitTwo
                         ? Row(
                             children: [
                               Expanded(
@@ -71,7 +76,6 @@ class _InfoPanelState extends State<InfoPanel> {
                             ? Column(
                                 children: [
                                   Expanded(
-                                    flex: (status.primaryCount + status.primaryTarget).clamp(1, 100),
                                     child: _buildIpList(
                                       '负载均衡',
                                       status.primaryIps,
@@ -84,7 +88,6 @@ class _InfoPanelState extends State<InfoPanel> {
                                   ),
                                   const SizedBox(height: 10),
                                   Expanded(
-                                    flex: (status.backupCount + status.backupTarget).clamp(1, 100),
                                     child: _buildIpList(
                                       '备选列表',
                                       status.backupIps,
@@ -157,6 +160,27 @@ class _InfoPanelState extends State<InfoPanel> {
     );
   }
 
+  Widget _buildIdleState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.play_circle_outline, size: 64, color: Colors.grey[600]),
+          const SizedBox(height: 16),
+          Text(
+            '等待启动',
+            style: TextStyle(fontSize: 16, color: Colors.grey[500]),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '点击"启动"来运行',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHealthCheckBar(StatusData status, BoxConstraints constraints) {
     return const SizedBox.shrink();
   }
@@ -174,7 +198,6 @@ class _InfoPanelState extends State<InfoPanel> {
     final titleSize = constraints.maxWidth > 400 ? 14.0 : 13.0;
     final ipSize = constraints.maxWidth > 400 ? 13.0 : 12.0;
     final headerSize = constraints.maxWidth > 400 ? 11.0 : 10.0;
-    final icon = title == '负载均衡' ? Icons.swap_horiz : Icons.backup;
     
     return Card(
       elevation: 0,
@@ -187,35 +210,15 @@ class _InfoPanelState extends State<InfoPanel> {
             color: color.withValues(alpha: 0.15),
             border: Border(bottom: BorderSide(color: Colors.grey[800]!)),
           ),
-          child: Row(
-            children: [
-              Icon(icon, color: color, size: titleSize),
-              const SizedBox(width: 6),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: titleSize,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
+          child: Center(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: titleSize,
+                fontWeight: FontWeight.bold,
+                color: color,
               ),
-              const Spacer(),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: padding * 0.7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: count >= target ? Colors.green : Colors.orange,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '$count/$target',
-                  style: TextStyle(
-                    fontSize: headerSize,
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
         Container(

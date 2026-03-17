@@ -13,7 +13,7 @@ impl Args {
             return None;
         }
         
-        if args.iter().any(|a| a == "-h" || a == "--help") {
+        if args.iter().any(|a| a == "-h") {
             print_help();
             std::process::exit(0);
         }
@@ -37,7 +37,7 @@ impl Args {
         
         for (k, v_opt) in parsed {
             match k.as_str() {
-                "addr" | "a" => {
+                "addr" => {
                     if let Some(v) = v_opt
                         && let Ok(addr) = v.parse::<SocketAddr>()
                     {
@@ -51,7 +51,7 @@ impl Args {
                         config.api_addr = addr;
                     }
                 }
-                "colo" | "c" => {
+                "colo" => {
                     config.colo = v_opt.map(|v| {
                         v.split(',')
                             .map(|s| s.trim().to_string())
@@ -59,45 +59,50 @@ impl Args {
                             .collect()
                     });
                 }
-                "dl" | "d" | "delay" => {
+                "dl" => {
                     config.delay_limit = v_opt
                         .and_then(|v| v.parse::<u64>().ok())
                         .map_or(config.delay_limit, |v| v.clamp(1, 2000));
                 }
-                "tlr" | "l" | "loss" => {
+                "tlr" => {
                     config.tlr = v_opt
                         .and_then(|v| v.parse::<f64>().ok())
                         .map_or(config.tlr, |v| v.clamp(0.0, 1.0));
                 }
-                "http" | "u" | "url" => {
+                "http" => {
                     if let Some(v) = v_opt {
                         config.http = v;
                     }
                 }
-                "ips" | "i" => {
+                "ips" => {
                     config.ips = v_opt
                         .and_then(|v| v.parse::<usize>().ok())
                         .map_or(config.ips, |v| v.clamp(1, 128));
                 }
-                "n" | "t" | "threads" => {
+                "n" => {
                     config.threads = v_opt
                         .and_then(|v| v.parse::<usize>().ok())
                         .map_or(config.threads, |v| v.clamp(1, 1024));
                 }
-                "tp" | "p" | "tls-port" => {
+                "tp" => {
                     config.tls_port = v_opt
                         .and_then(|v| v.parse::<u16>().ok())
                         .map_or(config.tls_port, |v| v.clamp(1, u16::MAX));
                 }
-                "P" | "http-port" => {
+                "p" => {
                     config.http_port = v_opt
                         .and_then(|v| v.parse::<u16>().ok())
                         .map_or(config.http_port, |v| v.clamp(1, u16::MAX));
                 }
-                "f" | "file" => {
+                "f" => {
                     if let Some(v) = v_opt {
                         config.ip_file = v;
                     }
+                }
+                "s" => {
+                    config.max_sticky_slots = v_opt
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .map_or(config.max_sticky_slots, |v| v.clamp(1, 32));
                 }
                 _ => {
                     print_help();
@@ -189,7 +194,8 @@ pub fn print_help() {
         ("-dl", "有效连接的平均延迟上限（毫秒）", "500"),
         ("-tlr", "有效连接的平均丢包率上限", "0.1"),
         ("-http", "测速地址", "http://cp.cloudflare.com/cdn-cgi/trace"),
-        ("-ips", "目标负载 IP 数量", "10"),
+        ("-s", "最大负载槽数", "5"),
+        ("-ips", "目标负载数量", "10"),
         ("-n", "延迟测速并发上限", "16"),
         ("-tp", "TLS 流量使用的端口号", "443"),
         ("-p", "HTTP 流量使用的端口号", "80"),

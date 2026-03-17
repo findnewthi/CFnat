@@ -1,10 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use parking_lot::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::core::{IpPool, LoadBalancer, HttpingConfig, build_hyper_client, parse_url, run_continuous_httping, run_forward};
+use crate::log::push_log;
 
 pub struct ServiceState {
     pub running: AtomicBool,
@@ -12,6 +14,7 @@ pub struct ServiceState {
     pub loadbalancer: RwLock<Option<Arc<LoadBalancer>>>,
     pub config: RwLock<ServiceConfig>,
     pub cancel_token: RwLock<Option<CancellationToken>>,
+    pub start_time: RwLock<Option<Instant>>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -27,6 +30,7 @@ pub struct ServiceConfig {
     pub colo: Option<Vec<String>>,
     pub listen_addr: SocketAddr,
     pub api_addr: SocketAddr,
+    pub max_sticky_slots: usize,
 }
 
 impl Default for ServiceConfig {
@@ -43,6 +47,7 @@ impl Default for ServiceConfig {
             colo: None,
             listen_addr: "127.6.6.6:1234".parse().unwrap(),
             api_addr: "127.0.0.1:0".parse().unwrap(),
+            max_sticky_slots: 5,
         }
     }
 }
@@ -61,6 +66,7 @@ impl ServiceState {
             loadbalancer: RwLock::new(None),
             config: RwLock::new(ServiceConfig::default()),
             cancel_token: RwLock::new(None),
+            start_time: RwLock::new(None),
         }
     }
 
@@ -74,6 +80,14 @@ impl ServiceState {
 
     pub fn update_config(&self, new_config: ServiceConfig) {
         *self.config.write() = new_config;
+    }
+
+    pub fn get_uptime_secs(&self) -> u64 {
+        if let Some(start) = self.start_time.read().as_ref() {
+            start.elapsed().as_secs()
+        } else {
+            0
+        }
     }
 
     pub fn start(&self) -> Result<(), String> {
@@ -112,13 +126,15 @@ impl ServiceState {
                 .with_timeout(1800)
                 .with_notify(notify_tx)
                 .with_client(client.clone())
-                .with_colo_filter(colo_filter.clone()),
+                .with_colo_filter(colo_filter.clone())
+                .with_max_sticky_slots(config.max_sticky_slots),
         );
 
         let cancel_token_for_storage = cancel_token.clone();
         *self.ip_pool.write() = Some(ip_pool.clone());
         *self.loadbalancer.write() = Some(lb.clone());
         *self.cancel_token.write() = Some(cancel_token_for_storage);
+        *self.start_time.write() = Some(Instant::now());
         self.running.store(true, Ordering::Relaxed);
 
         let ip_pool_clone = ip_pool.clone();
@@ -156,7 +172,7 @@ impl ServiceState {
         
         tokio::spawn(async move {
             if let Err(e) = run_forward(listen_addr, lb_forward, tls_port, http_port, forward_cancel_token).await {
-                eprintln!("转发服务错误：{}", e);
+                push_log("ERROR", &format!("转发服务错误：{}", e));
             }
         });
 
@@ -180,8 +196,9 @@ impl ServiceState {
         *self.ip_pool.write() = None;
         *self.loadbalancer.write() = None;
         *self.cancel_token.write() = None;
+        *self.start_time.write() = None;
 
-        println!("服务已停止");
+        push_log("INFO", "服务已停止");
         
         Ok(())
     }

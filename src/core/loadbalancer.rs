@@ -12,6 +12,7 @@ use crate::core::backend::Backend;
 use crate::core::config::get_global_config;
 use crate::core::httping::{PingConfig, PingResultDetail};
 use crate::core::utils;
+use crate::log::push_log;
 
 struct StickySlot {
     backend: Arc<Backend>,
@@ -50,6 +51,7 @@ pub struct LoadBalancer {
     cancel_token: CancellationToken,
     next_health_check: Mutex<Instant>,
     next_primary_health_check: Mutex<Instant>,
+    max_sticky_slots: usize,
 }
 
 pub enum AddResult {
@@ -86,6 +88,7 @@ impl LoadBalancer {
             cancel_token: CancellationToken::new(),
             next_health_check: Mutex::new(Instant::now()),
             next_primary_health_check: Mutex::new(Instant::now()),
+            max_sticky_slots: get_global_config().max_sticky_slots,
         }
     }
 
@@ -109,11 +112,11 @@ impl LoadBalancer {
         
         if primary_count < primary_target {
             self.add_to_primary(addr, delay, 0.0, colo_string);
-            println!("[+] {} {:.0}ms [{}]", addr, delay, colo.unwrap_or(""));
+            push_log("INFO", &format!("[+] {} {:.0}ms [{}]", addr, delay, colo.unwrap_or("")));
             AddResult::AddedToPrimary
         } else if backup_count < backup_target {
             self.add_to_backup(addr, delay, 0.0, colo_string);
-            println!("[+] {} {:.0}ms [{}] (备选)", addr, delay, colo.unwrap_or(""));
+            push_log("INFO", &format!("[+] {} {:.0}ms [{}] (备选)", addr, delay, colo.unwrap_or("")));
             AddResult::AddedToBackup
         } else {
             AddResult::QueueFull
@@ -162,6 +165,11 @@ impl LoadBalancer {
 
     pub fn with_client(mut self, client: Arc<crate::core::hyper::MyHyperClient>) -> Self {
         self.client = Some(client);
+        self
+    }
+
+    pub fn with_max_sticky_slots(mut self, max_sticky_slots: usize) -> Self {
+        self.max_sticky_slots = max_sticky_slots;
         self
     }
 
@@ -235,7 +243,7 @@ impl LoadBalancer {
         let total_conns: usize = slots.iter().map(|s| s.backend.connections()).sum();
         let last_expand = self.last_expand.lock();
         let should_expand = slots.is_empty() || (
-            slots.len() < get_global_config().max_sticky_slots && (
+            slots.len() < self.max_sticky_slots && (
                 now.duration_since(*last_expand) >= get_global_config().sticky_slot_expand_interval ||
                 slots.len() * slots.len() < total_conns
             )
@@ -313,7 +321,7 @@ impl LoadBalancer {
 
         let removed_count = primary_removed + backup_removed;
         if removed_count > 0 {
-            println!("[-] 清理 {} 个失效节点", removed_count);
+            push_log("INFO", &format!("[-] 清理 {} 个失效节点", removed_count));
         }
     }
 
@@ -384,7 +392,7 @@ impl LoadBalancer {
                 promoted += 1;
             }
             if promoted > 0 {
-                println!("[↑] {} 个备选提升到主队列", promoted);
+                push_log("INFO", &format!("[↑] {} 个备选提升到主队列", promoted));
             }
         }
 
@@ -522,7 +530,7 @@ impl LoadBalancer {
             loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
-                        println!("[健康检查] 收到停止信号，退出");
+                        push_log("INFO", "[健康检查] 收到停止信号，退出");
                         break;
                     }
                     _ = backup_interval.tick() => {
@@ -609,7 +617,7 @@ impl LoadBalancer {
             lb.cleanup_removed();
             
             if removed_count > 0 {
-                println!("[{}] 检查完成，移除 {} 个", source_owned, removed_count);
+                push_log("INFO", &format!("[{}] 检查完成，移除 {} 个", source_owned, removed_count));
             }
             
             if is_primary {
@@ -651,7 +659,7 @@ impl LoadBalancer {
             Some(detail) => {
                 if detail.colo_mismatch {
                     let colo_str = detail.colo.as_deref().unwrap_or("未知");
-                    println!("[-] {} 数据中心[{}]不匹配", backend.addr, colo_str);
+                    push_log("WARN", &format!("[-] {} 数据中心[{}]不匹配", backend.addr, colo_str));
                     remove_and_refill(backend);
                     return true;
                 }
@@ -673,11 +681,11 @@ impl LoadBalancer {
                 let loss_rate = backend.get_loss_rate();
                 
                 if avg_delay > delay_threshold {
-                    println!("[-] {} 延迟{:.0}ms>{:.0}ms", backend.addr, avg_delay, delay_threshold);
+                    push_log("WARN", &format!("[-] {} 延迟{:.0}ms>{:.0}ms", backend.addr, avg_delay, delay_threshold));
                     remove_and_refill(backend);
                     true
                 } else if loss_rate > loss_threshold {
-                    println!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0);
+                    push_log("WARN", &format!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0));
                     remove_and_refill(backend);
                     true
                 } else {
@@ -694,7 +702,7 @@ impl LoadBalancer {
                 
                 let loss_rate = backend.get_loss_rate();
                 if loss_rate > loss_threshold {
-                    println!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0);
+                    push_log("WARN", &format!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0));
                     remove_and_refill(backend);
                     true
                 } else {

@@ -158,6 +158,7 @@ class ApiService extends ChangeNotifier {
     int? httpPort,
     List<String>? colo,
     String? listenAddr,
+    int? maxStickySlots,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -171,6 +172,7 @@ class ApiService extends ChangeNotifier {
         if (httpPort != null) 'http_port': httpPort,
         if (colo != null) 'colo': colo,
         if (listenAddr != null) 'listen_addr': listenAddr,
+        if (maxStickySlots != null) 'max_sticky_slots': maxStickySlots,
       };
 
       final response = await post(
@@ -214,10 +216,39 @@ class ApiService extends ChangeNotifier {
       return false;
     }
   }
+
+  Future<List<LogEntry>> fetchLogs() async {
+    try {
+      final response = await get(Uri.parse('/api/logs'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((e) => LogEntry.fromJson(e)).toList();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('获取日志失败: $e');
+      return [];
+    }
+  }
+
+  Future<bool> clearLogs() async {
+    try {
+      final response = await post(Uri.parse('/api/logs/clear'));
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+        return result['success'] == true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('清空日志失败: $e');
+      return false;
+    }
+  }
 }
 
 class StatusData {
   final bool running;
+  final int uptimeSecs;
   final int nextHealthCheck;
   final int healthCheckInterval;
   final int primaryCount;
@@ -230,6 +261,7 @@ class StatusData {
 
   StatusData({
     required this.running,
+    required this.uptimeSecs,
     required this.nextHealthCheck,
     required this.healthCheckInterval,
     required this.primaryCount,
@@ -244,6 +276,7 @@ class StatusData {
   factory StatusData.stopped() {
     return StatusData(
       running: false,
+      uptimeSecs: 0,
       nextHealthCheck: 0,
       healthCheckInterval: 25,
       primaryCount: 0,
@@ -259,6 +292,7 @@ class StatusData {
   factory StatusData.fromJson(Map<String, dynamic> json) {
     return StatusData(
       running: json['running'] ?? false,
+      uptimeSecs: json['uptime_secs'] ?? 0,
       nextHealthCheck: json['next_health_check'] ?? 0,
       healthCheckInterval: json['health_check_interval'] ?? 25,
       primaryCount: json['primary_count'] ?? 0,
@@ -304,6 +338,26 @@ class IpInfo {
   }
 }
 
+class LogEntry {
+  final String timestamp;
+  final String level;
+  final String message;
+
+  LogEntry({
+    required this.timestamp,
+    required this.level,
+    required this.message,
+  });
+
+  factory LogEntry.fromJson(Map<String, dynamic> json) {
+    return LogEntry(
+      timestamp: json['timestamp'] ?? '',
+      level: json['level'] ?? 'INFO',
+      message: json['message'] ?? '',
+    );
+  }
+}
+
 class ConfigData {
   final String addr;
   final int delayLimit;
@@ -315,6 +369,7 @@ class ConfigData {
   final List<String>? colo;
   final String http;
   final String ipFile;
+  final int maxStickySlots;
 
   ConfigData({
     required this.addr,
@@ -327,6 +382,7 @@ class ConfigData {
     this.colo,
     required this.http,
     required this.ipFile,
+    required this.maxStickySlots,
   });
 
   factory ConfigData.fromJson(Map<String, dynamic> json) {
@@ -343,6 +399,7 @@ class ConfigData {
           : null,
       http: json['http'] ?? '',
       ipFile: json['ip_file'] ?? '',
+      maxStickySlots: json['max_sticky_slots'] ?? 5,
     );
   }
 }

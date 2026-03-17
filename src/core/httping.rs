@@ -12,6 +12,7 @@ use crate::core::hyper::{parse_url, send_request};
 use crate::core::ip::IpPool;
 use crate::core::loadbalancer::{AddResult, LoadBalancer};
 use crate::core::pool::GLOBAL_LIMITER;
+use crate::log::push_log;
 
 type PingResult = Option<(SocketAddr, f32, Option<String>, u8, bool)>;
 
@@ -149,7 +150,7 @@ pub async fn run_continuous_httping(
     cancel_token: CancellationToken,
 ) {
     let Some((_, host, scheme, path)) = parse_url(url) else {
-        eprintln!("URL 解析失败");
+        push_log("ERROR", "URL 解析失败");
         return;
     };
 
@@ -164,7 +165,7 @@ pub async fn run_continuous_httping(
         colo_filter: config.colo_filter,
     };
 
-    println!("测速启动...");
+    push_log("INFO", "测速启动...");
 
     let concurrency = GLOBAL_LIMITER.get().unwrap().max_concurrent();
     let mut tasks: JoinSet<PingResult> = JoinSet::new();

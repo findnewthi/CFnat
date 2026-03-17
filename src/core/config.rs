@@ -27,21 +27,22 @@ impl Default for Config {
 
 impl Config {
     pub fn new() -> Self {
+        let sample_window = 50.0;
         Config {
-            sample_window: 50.0,
-            alpha: 2.0 / (50.0 + 1.0),
-            evict_threshold: 20,
-            max_smooth_ratio: 5.0,
-            max_backup_target: 10,
-            ping_times: 4,
-            health_check_concurrency: 2,
-            health_check_interval: Duration::from_secs(25),
-            warming_duration: Duration::from_secs(60),
-            sticky_base_interval: Duration::from_secs(10),
-            sticky_increment_interval: Duration::from_secs(5),
-            max_sticky_slots: 5,
-            sticky_slot_ttl: Duration::from_secs(15),
-            sticky_slot_expand_interval: Duration::from_secs(10),
+            sample_window,                                        // EWMA 样本窗口大小
+            alpha: 2.0 / (sample_window + 1.0),                   // EWMA 衰减因子
+            evict_threshold: (sample_window * 0.4) as usize,      // 剔除阈值：EWMA 样本数达到此值后才考虑剔除
+            max_smooth_ratio: 5.0,                                // 最大平滑比：避免评分受历史数据过度影响
+            max_backup_target: 10,                                // 最大备选 IP 数量
+            ping_times: 4,                                        // 每个 IP 的测速次数
+            health_check_concurrency: 2,                          // 健康检查并发数
+            health_check_interval: Duration::from_secs(25),       // 健康检查间隔
+            warming_duration: Duration::from_secs(60),            // 新增 IP 预热时长
+            sticky_base_interval: Duration::from_secs(10),        // Sticky 模式基础切换间隔
+            sticky_increment_interval: Duration::from_secs(5),    // Sticky 每增加一个槽位的间隔增量
+            max_sticky_slots: 5,                                  // Sticky 模式最大槽位数
+            sticky_slot_ttl: Duration::from_secs(15),             // Sticky 槽位过期时间
+            sticky_slot_expand_interval: Duration::from_secs(10), // Sticky 槽位扩展检查间隔
         }
     }
 }

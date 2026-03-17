@@ -42,6 +42,7 @@ pub struct ServerConfig {
     pub colo: Option<Vec<String>>,
     pub http: String,
     pub ip_file: String,
+    pub max_sticky_slots: usize,
 }
 
 impl From<crate::core::ServiceConfig> for ServerConfig {
@@ -57,6 +58,7 @@ impl From<crate::core::ServiceConfig> for ServerConfig {
             colo: config.colo,
             http: config.http,
             ip_file: config.ip_file,
+            max_sticky_slots: config.max_sticky_slots,
         }
     }
 }
@@ -64,6 +66,7 @@ impl From<crate::core::ServiceConfig> for ServerConfig {
 #[derive(Serialize)]
 pub struct StatusResponse {
     pub running: bool,
+    pub uptime_secs: u64,
     pub next_health_check: u64,
     pub health_check_interval: u64,
     pub primary_count: usize,
@@ -165,6 +168,7 @@ pub struct StartRequest {
     pub http_port: Option<u16>,
     pub colo: Option<Vec<String>>,
     pub listen_addr: Option<SocketAddr>,
+    pub max_sticky_slots: Option<usize>,
 }
 
 #[derive(Deserialize)]

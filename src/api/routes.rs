@@ -5,7 +5,7 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 
 use super::{AppState, serve_embedded_files};
-use crate::api::handlers::{get_config, get_status, health_check, start_service, stop_service};
+use crate::api::handlers::{get_config, get_status, health_check, start_service, stop_service, get_logs, clear_logs};
 use crate::api::sse::stream_updates;
 
 pub fn create_router(state: AppState) -> Router {
@@ -16,6 +16,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/stop", post(stop_service))
         .route("/api/health", get(health_check))
         .route("/api/stream", get(stream_updates))
+        .route("/api/logs", get(get_logs))
+        .route("/api/logs/clear", post(clear_logs))
         .fallback(serve_embedded_files)
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state)

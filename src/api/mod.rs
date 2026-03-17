@@ -188,6 +188,14 @@ pub struct ApiResponse {
 #[folder = "flutter/build/web"]
 struct Assets;
 
+fn get_mime_type(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("js") => "application/javascript",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
+}
+
 pub async fn serve_embedded_files(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     
@@ -207,8 +215,8 @@ pub async fn serve_embedded_files(uri: Uri) -> Response {
     
     match Assets::get(path) {
         Some(content) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], content.data.into_owned()).into_response()
+            let mime = get_mime_type(path);
+            ([(header::CONTENT_TYPE, mime)], content.data.into_owned()).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

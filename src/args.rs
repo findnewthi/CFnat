@@ -107,6 +107,11 @@ impl Args {
             }
         }
         
+        if config.api_addr == config.listen_addr && config.api_addr.port() != 0 {
+            eprintln!("错误: -api 和 -addr 参数不能使用相同地址: {}", config.api_addr);
+            std::process::exit(1);
+        }
+        
         config
     }
 

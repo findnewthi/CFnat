@@ -42,7 +42,7 @@ async fn run(service: Arc<ServiceState>) {
         axum::serve(listener, app).await.unwrap();
     });
 
-    println!("通过 Web 界面控制: `http://{}` ", actual_addr);
+    println!("通过 Web 界面控制: http://{} ", actual_addr);
 
     match service.start() {
         Ok(_) => println!("服务已启动"),

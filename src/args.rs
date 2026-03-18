@@ -18,7 +18,7 @@ impl Args {
             std::process::exit(0);
         }
         
-        Some(Self::parse_from_iter(args.iter().cloned()))
+        Some(Self::parse_from_iter(args.iter().skip(1).cloned()))
     }
     
     pub fn parse_line_to_config(line: &str) -> Option<ServiceConfig> {
@@ -121,7 +121,7 @@ impl Args {
     }
 
     fn parse_args_to_vec<I: Iterator<Item = String>>(iter: I) -> Vec<(String, Option<String>)> {
-        let mut iter = iter.skip(1).peekable();
+        let mut iter = iter.peekable();
         let mut result = Vec::new();
 
         while let Some(arg) = iter.next() {

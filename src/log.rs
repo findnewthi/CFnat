@@ -115,4 +115,12 @@ macro_rules! log_debug {
 
 pub fn push_log(level: &str, message: &str) {
     get_log_buffer().push(level, message);
+    
+    match level {
+        "INFO" => println!("{}", message),
+        "WARN" => println!("[警告] {}", message),
+        "ERROR" => eprintln!("[错误] {}", message),
+        "DEBUG" => {}
+        _ => println!("{}", message),
+    }
 }

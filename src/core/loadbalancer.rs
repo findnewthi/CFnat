@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
 use parking_lot::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -14,10 +13,17 @@ use crate::core::httping::{PingConfig, PingResultDetail};
 use crate::core::utils;
 use crate::log::push_log;
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 struct StickySlot {
     backend: Arc<Backend>,
     last_switch: Instant,
-    last_access: Instant,
+    last_access_ms: AtomicU64,
     interval: Duration,
 }
 
@@ -28,12 +34,15 @@ struct HealthCheckConfig {
     loss_threshold: f32,
 }
 
+struct BalancerInner {
+    primary: Vec<Arc<Backend>>,
+    backup: Vec<Arc<Backend>>,
+}
+
 pub struct LoadBalancer {
-    primary: RwLock<Vec<Arc<Backend>>>,
-    primary_index: AtomicUsize,
-    backup: RwLock<Vec<Arc<Backend>>>,
-    backup_index: AtomicUsize,
+    inner: RwLock<BalancerInner>,
     ip_set: RwLock<HashSet<std::net::IpAddr>>,
+    primary_index: AtomicUsize,
     primary_target: AtomicUsize,
     backup_target: AtomicUsize,
     min_active_target: usize,
@@ -42,15 +51,15 @@ pub struct LoadBalancer {
     http_port: u16,
     timeout_ms: u64,
     notify_tx: Option<tokio::sync::watch::Sender<bool>>,
-    delay_threshold: RwLock<f32>,
-    loss_threshold: RwLock<f32>,
+    delay_threshold: AtomicU32,
+    loss_threshold: AtomicU32,
     client: Option<Arc<crate::core::hyper::MyHyperClient>>,
     colo_filter: Option<Arc<Vec<String>>>,
-    sticky_slots: Mutex<Vec<StickySlot>>,
-    last_expand: Mutex<Instant>,
+    sticky_slots: RwLock<Vec<StickySlot>>,
+    last_expand_ms: AtomicU64,
     cancel_token: CancellationToken,
-    next_health_check: Mutex<Instant>,
-    next_primary_health_check: Mutex<Instant>,
+    next_health_check_ms: AtomicU64,
+    next_primary_health_check_ms: AtomicU64,
     max_sticky_slots: usize,
 }
 
@@ -66,11 +75,12 @@ impl LoadBalancer {
         let backup_target = ((primary_target as f32 * 0.5).ceil() as usize).min(get_global_config().max_backup_target).max(2);
         let min_active_target = (primary_target as f32 / 2.0).ceil() as usize;
         Self {
-            primary: RwLock::new(Vec::new()),
-            primary_index: AtomicUsize::new(0),
-            backup: RwLock::new(Vec::new()),
-            backup_index: AtomicUsize::new(0),
+            inner: RwLock::new(BalancerInner {
+                primary: Vec::new(),
+                backup: Vec::new(),
+            }),
             ip_set: RwLock::new(HashSet::new()),
+            primary_index: AtomicUsize::new(0),
             primary_target: AtomicUsize::new(primary_target),
             backup_target: AtomicUsize::new(backup_target),
             min_active_target,
@@ -79,15 +89,15 @@ impl LoadBalancer {
             http_port: 80,
             timeout_ms: 2000,
             notify_tx: None,
-            delay_threshold: RwLock::new(0.0),
-            loss_threshold: RwLock::new(0.0),
+            delay_threshold: AtomicU32::new(0.0f32.to_bits()),
+            loss_threshold: AtomicU32::new(0.0f32.to_bits()),
             client: None,
             colo_filter: None,
-            sticky_slots: Mutex::new(Vec::new()),
-            last_expand: Mutex::new(Instant::now()),
+            sticky_slots: RwLock::new(Vec::new()),
+            last_expand_ms: AtomicU64::new(now_ms()),
             cancel_token: CancellationToken::new(),
-            next_health_check: Mutex::new(Instant::now()),
-            next_primary_health_check: Mutex::new(Instant::now()),
+            next_health_check_ms: AtomicU64::new(now_ms()),
+            next_primary_health_check_ms: AtomicU64::new(now_ms()),
             max_sticky_slots: get_global_config().max_sticky_slots,
         }
     }
@@ -124,12 +134,12 @@ impl LoadBalancer {
     }
 
     pub fn with_delay_threshold(self, delay_threshold: f32) -> Self {
-        *self.delay_threshold.write() = delay_threshold;
+        self.delay_threshold.store(delay_threshold.to_bits(), Ordering::Relaxed);
         self
     }
 
     pub fn with_loss_threshold(self, loss_threshold: f32) -> Self {
-        *self.loss_threshold.write() = loss_threshold;
+        self.loss_threshold.store(loss_threshold.to_bits(), Ordering::Relaxed);
         self
     }
 
@@ -139,7 +149,7 @@ impl LoadBalancer {
     }
 
     pub fn get_delay_threshold(&self) -> f32 {
-        *self.delay_threshold.read()
+        f32::from_bits(self.delay_threshold.load(Ordering::Relaxed))
     }
 
     pub fn with_health_check_url(mut self, url: String) -> Self {
@@ -196,94 +206,162 @@ impl LoadBalancer {
     }
 
     pub fn select(&self) -> Option<Arc<Backend>> {
-        let primary = self.primary.read();
+        let slots = self.sticky_slots.read();
+        let len = slots.len();
         
-        if !primary.is_empty() {
-            return self.select_backend_p2c(&primary, &self.primary_index);
+        if len > 0 {
+            return self.select_from_slots(&slots, len);
+        }
+        drop(slots);
+        
+        let inner = self.inner.read();
+        if !inner.primary.is_empty() {
+            return self.select_from_pool(&inner.primary, &self.primary_index);
+        }
+        if !inner.backup.is_empty() {
+            return self.select_from_pool(&inner.backup, &self.primary_index);
+        }
+        None
+    }
+
+    fn select_from_slots(&self, slots: &[StickySlot], len: usize) -> Option<Arc<Backend>> {
+        if len == 1 {
+            let current_ms = now_ms();
+            slots[0].last_access_ms.store(current_ms, Ordering::Release);
+            slots[0].backend.fetch_add_connection(1);
+            return Some(slots[0].backend.clone());
         }
         
-        drop(primary);
-        let backup = self.backup.read();
+        let i = self.primary_index.fetch_add(1, Ordering::Relaxed) % len;
+        let j = (i + len / 2) % len;
         
-        if backup.is_empty() {
+        let slot_i = slots.get(i)?;
+        let slot_j = slots.get(j)?;
+        
+        let idx = if slot_i.backend.connections() <= slot_j.backend.connections() {
+            i
+        } else {
+            j
+        };
+        
+        let slot = slots.get(idx)?;
+        let current_ms = now_ms();
+        slot.last_access_ms.store(current_ms, Ordering::Release);
+        slot.backend.fetch_add_connection(1);
+        
+        Some(slot.backend.clone())
+    }
+
+    fn select_from_pool(&self, pool: &[Arc<Backend>], index: &AtomicUsize) -> Option<Arc<Backend>> {
+        let len = pool.len();
+        if len == 0 {
             return None;
         }
         
-        self.select_backend_p2c(&backup, &self.backup_index)
+        if len == 1 {
+            pool[0].fetch_add_connection(1);
+            return Some(pool[0].clone());
+        }
+        
+        let i = index.fetch_add(1, Ordering::Relaxed) % len;
+        let j = (i + len / 2) % len;
+        
+        let backend_i = pool.get(i)?;
+        let backend_j = pool.get(j)?;
+        
+        let idx = if backend_i.connections() <= backend_j.connections() {
+            i
+        } else {
+            j
+        };
+        
+        let backend = pool.get(idx)?;
+        backend.fetch_add_connection(1);
+        Some(backend.clone())
     }
 
-    fn select_backend_p2c(&self, pool: &[Arc<Backend>], index: &AtomicUsize) -> Option<Arc<Backend>> {
+    fn maintain_sticky_slots(&self, pool: &[Arc<Backend>]) {
         let now = Instant::now();
-        let mut slots = self.sticky_slots.lock();
-
-        slots.retain(|s| now.duration_since(s.last_access) < get_global_config().sticky_slot_ttl);
-
-        let get_active_unused = |used_addrs: &std::collections::HashSet<SocketAddr>| {
+        let current_ms = now_ms();
+        let ttl_ms = get_global_config().sticky_slot_ttl.as_millis() as u64;
+        let expand_interval_ms = get_global_config().sticky_slot_expand_interval.as_millis() as u64;
+        
+        let mut slots = self.sticky_slots.write();
+        
+        slots.retain(|s| {
+            if s.backend.is_draining() {
+                return false;
+            }
+            let last_access = s.last_access_ms.load(Ordering::Acquire);
+            current_ms.saturating_sub(last_access) < ttl_ms
+        });
+        
+        let get_active_unused = |used_addrs: &HashSet<SocketAddr>| {
             pool.iter()
-                .filter(|b| (b.is_active() || b.is_warming()) && !used_addrs.contains(&b.addr))
+                .filter(|b| b.is_selectable() && !used_addrs.contains(&b.addr))
                 .min_by_key(|b| b.connections())
                 .cloned()
         };
-
-        let mut slots_to_rotate: Vec<(usize, Instant)> = Vec::new();
-        for (idx, slot) in slots.iter().enumerate() {
-            if now.duration_since(slot.last_switch) >= slot.interval {
-                slots_to_rotate.push((idx, now));
+        
+        for idx in 0..slots.len() {
+            if now.duration_since(slots[idx].last_switch) >= slots[idx].interval {
+                let used_addrs: HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
+                if let Some(new_b) = get_active_unused(&used_addrs) {
+                    slots[idx].backend = new_b;
+                    slots[idx].last_switch = now;
+                }
             }
         }
-
-        for (idx, _) in slots_to_rotate {
-            let used_addrs: std::collections::HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
-            if let Some(new_b) = get_active_unused(&used_addrs) {
-                slots[idx].backend = new_b;
-                slots[idx].last_switch = now;
-            }
-        }
-
+        
         let total_conns: usize = slots.iter().map(|s| s.backend.connections()).sum();
-        let last_expand = self.last_expand.lock();
+        let last_expand = self.last_expand_ms.load(Ordering::Relaxed);
         let should_expand = slots.is_empty() || (
             slots.len() < self.max_sticky_slots && (
-                now.duration_since(*last_expand) >= get_global_config().sticky_slot_expand_interval ||
+                current_ms.saturating_sub(last_expand) >= expand_interval_ms ||
                 slots.len() * slots.len() < total_conns
             )
         );
-        drop(last_expand);
-
+        
         if should_expand {
-            let used_addrs: std::collections::HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
+            let used_addrs: HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
             if let Some(b) = get_active_unused(&used_addrs) {
-                let interval = get_global_config().sticky_base_interval + Duration::from_secs((slots.len() as u64) * get_global_config().sticky_increment_interval.as_secs());
+                let interval = get_global_config().sticky_base_interval + 
+                    Duration::from_secs((slots.len() as u64) * get_global_config().sticky_increment_interval.as_secs());
                 slots.push(StickySlot {
                     backend: b,
                     last_switch: now,
-                    last_access: now,
+                    last_access_ms: AtomicU64::new(current_ms),
                     interval,
                 });
-                *self.last_expand.lock() = now;
+                self.last_expand_ms.store(current_ms, Ordering::Relaxed);
             }
         }
+    }
 
-        if slots.is_empty() {
-            return None;
-        }
-
-        let len = slots.len();
-        let selected = if len == 1 {
-            &mut slots[0]
-        } else {
-            let i = index.fetch_add(1, Ordering::Relaxed) % len;
-            let j = (i + 1) % len;
-            if slots[i].backend.connections() <= slots[j].backend.connections() {
-                &mut slots[i]
-            } else {
-                &mut slots[j]
+    fn start_sticky_maintainer(self: Arc<Self>) {
+        let cancel_token = self.cancel_token.clone();
+        let lb = self.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.tick().await;
+            
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        let inner = lb.inner.read();
+                        if !inner.primary.is_empty() {
+                            lb.maintain_sticky_slots(&inner.primary);
+                        } else if !inner.backup.is_empty() {
+                            lb.maintain_sticky_slots(&inner.backup);
+                        }
+                    }
+                }
             }
-        };
-
-        selected.last_access = now;
-        selected.backend.fetch_add_connection(1);
-        Some(selected.backend.clone())
+        });
     }
     
     fn check_warming_backends(&self, pool: &mut [Arc<Backend>]) {
@@ -295,7 +373,7 @@ impl LoadBalancer {
     }
 
     fn count_active(&self, pool: &[Arc<Backend>]) -> usize {
-        pool.iter().filter(|b| b.is_active()).count()
+        pool.iter().filter(|b| b.is_selectable()).count()
     }
 
     fn calculate_pool_avg_delay(&self, pool: &[Arc<Backend>]) -> f32 {
@@ -307,19 +385,34 @@ impl LoadBalancer {
     }
 
     fn cleanup_removed(&self) {
-        let mut primary = self.primary.write();
-        let before = primary.len();
-        primary.retain(|b| !b.is_removed());
-        let primary_removed = before - primary.len();
-        drop(primary);
-
-        let mut backup = self.backup.write();
-        let backup_before = backup.len();
-        backup.retain(|b| !b.is_removed());
-        let backup_removed = backup_before - backup.len();
-        drop(backup);
+        let mut inner = self.inner.write();
+        let mut drained_count = 0usize;
+        
+        for backend in inner.primary.iter() {
+            if backend.is_draining() && backend.connections() == 0 {
+                backend.mark_removed();
+                drained_count += 1;
+            }
+        }
+        for backend in inner.backup.iter() {
+            if backend.is_draining() && backend.connections() == 0 {
+                backend.mark_removed();
+                drained_count += 1;
+            }
+        }
+        
+        let before = inner.primary.len();
+        inner.primary.retain(|b| !b.is_removed());
+        let primary_removed = before - inner.primary.len();
+        
+        let backup_before = inner.backup.len();
+        inner.backup.retain(|b| !b.is_removed());
+        let backup_removed = backup_before - inner.backup.len();
 
         let removed_count = primary_removed + backup_removed;
+        if drained_count > 0 {
+            push_log("INFO", &format!("[↓] {} 个节点完成排水", drained_count));
+        }
         if removed_count > 0 {
             push_log("INFO", &format!("[-] 清理 {} 个失效节点", removed_count));
         }
@@ -344,9 +437,9 @@ impl LoadBalancer {
             return false;
         }
         
-        let backup = self.backup.read();
-        let active_count = self.count_active(&backup);
-        drop(backup);
+        let inner = self.inner.read();
+        let active_count = self.count_active(&inner.backup);
+        drop(inner);
         
         if active_count <= self.min_active_target {
             return false;
@@ -355,11 +448,13 @@ impl LoadBalancer {
         let avg_delay = backend.get_avg_delay();
         let loss_rate = backend.get_loss_rate();
 
-        let delay_threshold = *self.delay_threshold.read();
-        let loss_threshold = *self.loss_threshold.read();
+        let delay_threshold = f32::from_bits(self.delay_threshold.load(Ordering::Relaxed));
+        let loss_threshold = f32::from_bits(self.loss_threshold.load(Ordering::Relaxed));
 
         if avg_delay > delay_threshold || loss_rate > loss_threshold {
-            backend.mark_removed();
+            backend.mark_draining();
+            push_log("WARN", &format!("[→] {} 进入排水状态 (延迟{:.0}ms 丢包{:.0}%)", 
+                backend.addr, avg_delay, loss_rate * 100.0));
             true
         } else {
             false
@@ -369,42 +464,40 @@ impl LoadBalancer {
     pub fn remove_backend(&self, backend: Arc<Backend>) {
         let ip = backend.addr.ip();
         
-        self.primary.write().retain(|b| b.addr.ip() != ip);
-        self.backup.write().retain(|b| b.addr.ip() != ip);
+        let mut inner = self.inner.write();
+        inner.primary.retain(|b| b.addr.ip() != ip);
+        inner.backup.retain(|b| b.addr.ip() != ip);
+        drop(inner);
+        
         self.ip_set.write().remove(&ip);
         self.notify_resume();
     }
 
     pub fn refill_from_backup(&self) {
-        let primary_len = {
-            self.primary.read().len()
-        };
-
         let primary_target = self.primary_target.load(Ordering::Relaxed);
 
-        if primary_len < primary_target {
-            let mut backup = self.backup.write();
-            let mut primary = self.primary.write();
-            let mut promoted = 0;
-            while primary.len() < primary_target && !backup.is_empty() {
-                let backend = backup.remove(0);
-                primary.push(backend);
-                promoted += 1;
-            }
-            if promoted > 0 {
-                push_log("INFO", &format!("[↑] {} 个备选提升到主队列", promoted));
-            }
+        let mut inner = self.inner.write();
+        let mut promoted = 0;
+        while inner.primary.len() < primary_target && !inner.backup.is_empty() {
+            let backend = inner.backup.remove(0);
+            inner.primary.push(backend);
+            promoted += 1;
+        }
+        drop(inner);
+        
+        if promoted > 0 {
+            push_log("INFO", &format!("[↑] {} 个备选提升到主队列", promoted));
         }
 
         self.notify_resume();
     }
 
     pub fn get_backup_count(&self) -> usize {
-        self.backup.read().len()
+        self.inner.read().backup.len()
     }
 
     pub fn get_primary_count(&self) -> usize {
-        self.primary.read().len()
+        self.inner.read().primary.len()
     }
 
     pub fn get_primary_target(&self) -> usize {
@@ -416,13 +509,11 @@ impl LoadBalancer {
     }
 
     pub fn update_delay_threshold(&self, delay_threshold: f32) {
-        let mut delay = self.delay_threshold.write();
-        *delay = delay_threshold;
+        self.delay_threshold.store(delay_threshold.to_bits(), Ordering::Relaxed);
     }
 
     pub fn update_loss_threshold(&self, loss_threshold: f32) {
-        let mut loss = self.loss_threshold.write();
-        *loss = loss_threshold;
+        self.loss_threshold.store(loss_threshold.to_bits(), Ordering::Relaxed);
     }
 
     pub fn update_primary_target(&self, primary_target: usize) {
@@ -438,7 +529,7 @@ impl LoadBalancer {
         }
         
         let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
-        self.primary.write().push(backend);
+        self.inner.write().primary.push(backend);
         self.ip_set.write().insert(ip);
     }
 
@@ -449,21 +540,21 @@ impl LoadBalancer {
         }
         
         let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
-        self.backup.write().push(backend);
+        self.inner.write().backup.push(backend);
         self.ip_set.write().insert(ip);
     }
 
     pub fn get_primary_backends(&self) -> Vec<Arc<Backend>> {
-        self.primary.read().clone()
+        self.inner.read().primary.clone()
     }
 
     pub fn get_backup_backends(&self) -> Vec<Arc<Backend>> {
-        self.backup.read().clone()
+        self.inner.read().backup.clone()
     }
 
     pub fn get_sticky_ips(&self) -> Vec<std::net::IpAddr> {
         self.sticky_slots
-            .lock()
+            .read()
             .iter()
             .map(|s| s.backend.addr.ip())
             .collect()
@@ -474,28 +565,29 @@ impl LoadBalancer {
     }
 
     pub fn get_next_health_check_secs(&self) -> u64 {
-        let next = *self.next_health_check.lock();
-        let now = Instant::now();
-        if next > now {
-            (next - now).as_secs()
+        let next_ms = self.next_health_check_ms.load(Ordering::Relaxed);
+        let current_ms = now_ms();
+        if next_ms > current_ms {
+            (next_ms - current_ms) / 1000
         } else {
             0
         }
     }
 
     fn sort_backup(&self, pool_avg_delay: f32, pool_avg_loss: f32) {
-        let mut backup = self.backup.write();
-        backup.sort_by(|a, b| {
+        let mut inner = self.inner.write();
+        inner.backup.sort_by(|a, b| {
             let score_a = a.calculate_score(pool_avg_delay, pool_avg_loss);
             let score_b = b.calculate_score(pool_avg_delay, pool_avg_loss);
             score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.backup_index.store(0, Ordering::Relaxed);
     }
 
     pub fn start_health_check(self: Arc<Self>) {
         let Some(client) = &self.client else { return };
         let client = client.clone();
+
+        self.clone().start_sticky_maintainer();
 
         let cancel_token = self.cancel_token.clone();
 
@@ -512,12 +604,13 @@ impl LoadBalancer {
                 timeout_ms: self.timeout_ms,
                 colo_filter: self.colo_filter.clone(),
             },
-            delay_threshold: *self.delay_threshold.read(),
-            loss_threshold: *self.loss_threshold.read(),
+            delay_threshold: f32::from_bits(self.delay_threshold.load(Ordering::Relaxed)),
+            loss_threshold: f32::from_bits(self.loss_threshold.load(Ordering::Relaxed)),
         };
 
-        *self.next_health_check.lock() = Instant::now() + get_global_config().health_check_interval;
-        *self.next_primary_health_check.lock() = Instant::now() + Duration::from_secs(120);
+        let current_ms = now_ms();
+        self.next_health_check_ms.store(current_ms + get_global_config().health_check_interval.as_millis() as u64, Ordering::Relaxed);
+        self.next_primary_health_check_ms.store(current_ms + 120_000, Ordering::Relaxed);
 
         let lb = self.clone();
         tokio::spawn(async move {
@@ -552,23 +645,24 @@ impl LoadBalancer {
     ) {
         let (backends, is_primary) = if source == "主队列" {
             {
-                let mut primary = self.primary.write();
-                self.check_warming_backends(&mut primary);
+                let mut inner = self.inner.write();
+                self.check_warming_backends(&mut inner.primary);
             }
             (self.get_primary_backends(), true)
         } else {
             {
-                let mut backup = self.backup.write();
-                self.check_warming_backends(&mut backup);
+                let mut inner = self.inner.write();
+                self.check_warming_backends(&mut inner.backup);
             }
             (self.get_backup_backends(), false)
         };
         
         if backends.is_empty() {
+            let current_ms = now_ms();
             if is_primary {
-                *self.next_primary_health_check.lock() = Instant::now() + interval;
+                self.next_primary_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
             } else {
-                *self.next_health_check.lock() = Instant::now() + interval;
+                self.next_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
             }
             return;
         }
@@ -620,14 +714,17 @@ impl LoadBalancer {
                 push_log("INFO", &format!("[{}] 检查完成，移除 {} 个", source_owned, removed_count));
             }
             
+            let current_ms = now_ms();
             if is_primary {
                 lb.refill_from_backup();
-                *lb.next_primary_health_check.lock() = Instant::now() + interval;
+                lb.next_primary_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
             } else {
-                let pool_avg_delay = lb.calculate_pool_avg_delay(&lb.backup.read());
-                let pool_avg_loss = lb.calculate_pool_avg_loss(&lb.backup.read());
+                let inner = lb.inner.read();
+                let pool_avg_delay = lb.calculate_pool_avg_delay(&inner.backup);
+                let pool_avg_loss = lb.calculate_pool_avg_loss(&inner.backup);
+                drop(inner);
                 lb.sort_backup(pool_avg_delay, pool_avg_loss);
-                *lb.next_health_check.lock() = Instant::now() + interval;
+                lb.next_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
             }
         });
     }
@@ -648,8 +745,8 @@ impl LoadBalancer {
         lb: Arc<LoadBalancer>,
         source: &str,
     ) -> bool {
-        let remove_and_refill = |backend: Arc<Backend>| {
-            lb.remove_backend(backend);
+        let mark_draining_and_refill = |backend: &Arc<Backend>| {
+            backend.mark_draining();
             if source == "主队列" {
                 lb.refill_from_backup();
             }
@@ -660,7 +757,11 @@ impl LoadBalancer {
                 if detail.colo_mismatch {
                     let colo_str = detail.colo.as_deref().unwrap_or("未知");
                     push_log("WARN", &format!("[-] {} 数据中心[{}]不匹配", backend.addr, colo_str));
-                    remove_and_refill(backend);
+                    backend.mark_draining();
+                    lb.remove_backend(backend);
+                    if source == "主队列" {
+                        lb.refill_from_backup();
+                    }
                     return true;
                 }
 
@@ -680,20 +781,28 @@ impl LoadBalancer {
                 let avg_delay = backend.get_avg_delay();
                 let loss_rate = backend.get_loss_rate();
                 
-                if avg_delay > delay_threshold {
-                    push_log("WARN", &format!("[-] {} 延迟{:.0}ms>{:.0}ms", backend.addr, avg_delay, delay_threshold));
-                    remove_and_refill(backend);
-                    true
-                } else if loss_rate > loss_threshold {
-                    push_log("WARN", &format!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0));
-                    remove_and_refill(backend);
-                    true
+                if avg_delay > delay_threshold || loss_rate > loss_threshold {
+                    backend.record_failure();
+                    
+                    let failures = backend.consecutive_failures();
+                    if failures >= 3 {
+                        push_log("WARN", &format!("[→] {} 进入排水状态 (连续{}次失败)", 
+                            backend.addr, failures));
+                        mark_draining_and_refill(&backend);
+                        true
+                    } else {
+                        push_log("WARN", &format!("[!] {} 性能异常 (延迟{:.0}ms 丢包{:.0}%) 第{}次", 
+                            backend.addr, avg_delay, loss_rate * 100.0, failures));
+                        false
+                    }
                 } else {
+                    backend.record_success();
                     false
                 }
             }
             None => {
                 backend.record_loss(true);
+                backend.record_failure();
                 
                 let sample_count = backend.get_sample_count();
                 if sample_count < get_global_config().sample_window as usize {
@@ -701,11 +810,20 @@ impl LoadBalancer {
                 }
                 
                 let loss_rate = backend.get_loss_rate();
-                if loss_rate > loss_threshold {
-                    push_log("WARN", &format!("[-] {} 丢包{:.0}%>{:.0}%", backend.addr, loss_rate * 100.0, loss_threshold * 100.0));
-                    remove_and_refill(backend);
+                let failures = backend.consecutive_failures();
+                
+                if loss_rate > loss_threshold && failures >= 3 {
+                    push_log("WARN", &format!("[→] {} 进入排水状态 (丢包{:.0}% 连续{}次失败)", 
+                        backend.addr, loss_rate * 100.0, failures));
+                    mark_draining_and_refill(&backend);
+                    true
+                } else if failures >= 3 {
+                    push_log("WARN", &format!("[→] {} 进入排水状态 (连续{}次无响应)", 
+                        backend.addr, failures));
+                    mark_draining_and_refill(&backend);
                     true
                 } else {
+                    push_log("WARN", &format!("[!] {} 无响应 第{}次", backend.addr, failures));
                     false
                 }
             }

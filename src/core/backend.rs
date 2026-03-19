@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -12,7 +12,8 @@ use crate::core::utils;
 enum BackendState {
     Warming = 0,
     Active = 1,
-    Removed = 2,
+    Draining = 2,
+    Removed = 3,
 }
 
 pub struct Backend {
@@ -24,6 +25,7 @@ pub struct Backend {
     sample_count: AtomicUsize,
     state: AtomicU8,
     entered_state_at: Mutex<Instant>,
+    consecutive_failures: AtomicU32,
 }
 
 impl Backend {
@@ -37,6 +39,7 @@ impl Backend {
             sample_count: AtomicUsize::new(0),
             state: AtomicU8::new(BackendState::Warming as u8),
             entered_state_at: Mutex::new(Instant::now()),
+            consecutive_failures: AtomicU32::new(0),
         }
     }
 
@@ -50,6 +53,7 @@ impl Backend {
             sample_count: AtomicUsize::new(0),
             state: AtomicU8::new(BackendState::Warming as u8),
             entered_state_at: Mutex::new(Instant::now()),
+            consecutive_failures: AtomicU32::new(0),
         }
     }
 
@@ -106,6 +110,15 @@ impl Backend {
         self.state.load(Ordering::Relaxed) == BackendState::Active as u8
     }
 
+    pub fn is_draining(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BackendState::Draining as u8
+    }
+
+    pub fn is_selectable(&self) -> bool {
+        let state = self.state.load(Ordering::Relaxed);
+        state == BackendState::Active as u8 || state == BackendState::Warming as u8
+    }
+
     pub fn mark_removed(&self) {
         self.state.store(BackendState::Removed as u8, Ordering::Relaxed);
         *self.entered_state_at.lock() = Instant::now();
@@ -114,6 +127,24 @@ impl Backend {
     pub fn mark_active(&self) {
         self.state.store(BackendState::Active as u8, Ordering::Relaxed);
         *self.entered_state_at.lock() = Instant::now();
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    pub fn mark_draining(&self) {
+        self.state.store(BackendState::Draining as u8, Ordering::Relaxed);
+        *self.entered_state_at.lock() = Instant::now();
+    }
+
+    pub fn record_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    pub fn record_failure(&self) {
+        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures.load(Ordering::Relaxed)
     }
 
     pub fn check_warming_expired(&self) -> bool {

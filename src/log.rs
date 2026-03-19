@@ -64,6 +64,12 @@ impl LogBuffer {
     }
 }
 
+impl Default for LogBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 static LOG_BUFFER: std::sync::OnceLock<Arc<LogBuffer>> = std::sync::OnceLock::new();
 
 pub fn get_log_buffer() -> Arc<LogBuffer> {

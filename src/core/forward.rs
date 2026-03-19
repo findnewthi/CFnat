@@ -2,17 +2,49 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::io;
+use tokio::io::{self, BufReader};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
+use crate::core::backend::Backend;
 use crate::core::loadbalancer::LoadBalancer;
 use crate::log::push_log;
 
 const READABLE_TIMEOUT_SECS: u64 = 10;
+const BUFFER_SIZE: usize = 128 * 1024;
 
 fn is_tls(buf: &[u8]) -> bool {
     !buf.is_empty() && buf[0] == 0x16
+}
+
+async fn transfer_direction(
+    reader: OwnedReadHalf,
+    mut writer: OwnedWriteHalf,
+    record_metrics: Option<(Arc<LoadBalancer>, Arc<Backend>, Instant)>,
+) -> io::Result<()> {
+    if let Some((lb, backend, start)) = record_metrics {
+        match tokio::time::timeout(
+            Duration::from_secs(READABLE_TIMEOUT_SECS),
+            reader.readable()
+        ).await {
+            Ok(Ok(_)) => {
+                let delay = start.elapsed().as_secs_f32() * 1000.0;
+                lb.record_delay(&backend, delay);
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("后端 {} 秒无响应", READABLE_TIMEOUT_SECS)
+                ));
+            }
+        }
+    }
+
+    let mut buffered = BufReader::with_capacity(BUFFER_SIZE, reader);
+    io::copy(&mut buffered, &mut writer).await?;
+    Ok(())
 }
 
 async fn handle_client(
@@ -45,34 +77,19 @@ async fn handle_client(
         server.set_nodelay(true)?;
         client.set_nodelay(true)?;
         
-        let (mut client_read, mut client_write) = client.into_split();
-        let (mut server_read, mut server_write) = server.into_split();
+        let (client_read, client_write) = client.into_split();
+        let (server_read, server_write) = server.into_split();
         
         let lb_inner = lb.clone();
         let backend_inner = backend.clone();
         
-        let s2c = async move {
-            match tokio::time::timeout(
-                Duration::from_secs(READABLE_TIMEOUT_SECS),
-                server_read.readable()
-            ).await {
-                Ok(Ok(_)) => {
-                    let delay = start.elapsed().as_secs_f32() * 1000.0;
-                    lb_inner.record_delay(&backend_inner, delay);
-                }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("后端 {} 秒无响应", READABLE_TIMEOUT_SECS)
-                    ));
-                }
-            }
-            
-            io::copy(&mut server_read, &mut client_write).await
-        };
+        let s2c = transfer_direction(
+            server_read,
+            client_write,
+            Some((lb_inner, backend_inner, start)),
+        );
         
-        let c2s = io::copy(&mut client_read, &mut server_write);
+        let c2s = transfer_direction(client_read, server_write, None);
         
         let result = tokio::select! {
             res = c2s => res,

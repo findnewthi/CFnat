@@ -124,9 +124,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: 安装 Zig
-        uses: mlugg/setup-zig@v2.2.1
+        uses: mlugg/setup-zig@v2
         with:
-          version: master
+#          version: master
+          version: 0.15.2
 
       - name: 安装 MUSL (Linux)
         if: startsWith(matrix.os, 'Linux') && contains(matrix.target, 'musl')

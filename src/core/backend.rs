@@ -12,7 +12,7 @@ use crate::core::utils;
 enum BackendState {
     Warming = 0,
     Active = 1,
-    Draining = 2,
+    Isolated = 2,
     Removed = 3,
 }
 
@@ -110,8 +110,8 @@ impl Backend {
         self.state.load(Ordering::Relaxed) == BackendState::Active as u8
     }
 
-    pub fn is_draining(&self) -> bool {
-        self.state.load(Ordering::Relaxed) == BackendState::Draining as u8
+    pub fn is_isolated(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BackendState::Isolated as u8
     }
 
     pub fn is_selectable(&self) -> bool {
@@ -130,8 +130,8 @@ impl Backend {
         self.consecutive_failures.store(0, Ordering::Relaxed);
     }
 
-    pub fn mark_draining(&self) {
-        self.state.store(BackendState::Draining as u8, Ordering::Relaxed);
+    pub fn mark_isolated(&self) {
+        self.state.store(BackendState::Isolated as u8, Ordering::Relaxed);
         *self.entered_state_at.lock() = Instant::now();
     }
 

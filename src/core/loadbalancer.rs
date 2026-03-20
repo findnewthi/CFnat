@@ -289,7 +289,7 @@ impl LoadBalancer {
         let mut slots = self.sticky_slots.write();
         
         slots.retain(|s| {
-            if s.backend.is_draining() {
+            if s.backend.is_isolated() {
                 return false;
             }
             let last_access = s.last_access_ms.load(Ordering::Acquire);
@@ -303,13 +303,13 @@ impl LoadBalancer {
                 .cloned()
         };
         
-        for idx in 0..slots.len() {
-            if now.duration_since(slots[idx].last_switch) >= slots[idx].interval {
-                let used_addrs: HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
-                if let Some(new_b) = get_active_unused(&used_addrs) {
-                    slots[idx].backend = new_b;
-                    slots[idx].last_switch = now;
-                }
+        let mut used_addrs: HashSet<_> = slots.iter().map(|s| s.backend.addr).collect();
+        
+        for s in slots.iter_mut().filter(|s| now.duration_since(s.last_switch) >= s.interval) {
+            if let Some(new_b) = get_active_unused(&used_addrs) {
+                used_addrs.insert(new_b.addr);
+                s.backend = new_b;
+                s.last_switch = now;
             }
         }
         
@@ -372,10 +372,6 @@ impl LoadBalancer {
         }
     }
 
-    fn count_active(&self, pool: &[Arc<Backend>]) -> usize {
-        pool.iter().filter(|b| b.is_selectable()).count()
-    }
-
     fn calculate_pool_avg_delay(&self, pool: &[Arc<Backend>]) -> f32 {
         utils::calculate_pool_avg_delay(pool)
     }
@@ -386,20 +382,12 @@ impl LoadBalancer {
 
     fn cleanup_removed(&self) {
         let mut inner = self.inner.write();
-        let mut drained_count = 0usize;
         
-        for backend in inner.primary.iter() {
-            if backend.is_draining() && backend.connections() == 0 {
-                backend.mark_removed();
-                drained_count += 1;
-            }
-        }
-        for backend in inner.backup.iter() {
-            if backend.is_draining() && backend.connections() == 0 {
-                backend.mark_removed();
-                drained_count += 1;
-            }
-        }
+        let removed_ips: Vec<_> = inner.primary.iter()
+            .chain(inner.backup.iter())
+            .filter(|b| b.is_removed())
+            .map(|b| b.addr.ip())
+            .collect();
         
         let before = inner.primary.len();
         inner.primary.retain(|b| !b.is_removed());
@@ -409,12 +397,16 @@ impl LoadBalancer {
         inner.backup.retain(|b| !b.is_removed());
         let backup_removed = backup_before - inner.backup.len();
 
-        let removed_count = primary_removed + backup_removed;
-        if drained_count > 0 {
-            push_log("INFO", &format!("[↓] {} 个节点完成排水", drained_count));
+        drop(inner);
+        
+        for ip in removed_ips {
+            self.ip_set.write().remove(&ip);
         }
+
+        let removed_count = primary_removed + backup_removed;
         if removed_count > 0 {
             push_log("INFO", &format!("[-] 清理 {} 个失效节点", removed_count));
+            self.notify_resume();
         }
     }
 
@@ -437,14 +429,6 @@ impl LoadBalancer {
             return false;
         }
         
-        let inner = self.inner.read();
-        let active_count = self.count_active(&inner.backup);
-        drop(inner);
-        
-        if active_count <= self.min_active_target {
-            return false;
-        }
-        
         let avg_delay = backend.get_avg_delay();
         let loss_rate = backend.get_loss_rate();
 
@@ -452,8 +436,8 @@ impl LoadBalancer {
         let loss_threshold = f32::from_bits(self.loss_threshold.load(Ordering::Relaxed));
 
         if avg_delay > delay_threshold || loss_rate > loss_threshold {
-            backend.mark_draining();
-            push_log("WARN", &format!("[→] {} 进入排水状态 (延迟{:.0}ms 丢包{:.0}%)", 
+            self.isolate_backend(backend);
+            push_log("WARN", &format!("[→] {} 进入隔离状态 (延迟{:.0}ms 丢包{:.0}%)", 
                 backend.addr, avg_delay, loss_rate * 100.0));
             true
         } else {
@@ -461,15 +445,48 @@ impl LoadBalancer {
         }
     }
 
-    pub fn remove_backend(&self, backend: Arc<Backend>) {
-        let ip = backend.addr.ip();
-        
-        let mut inner = self.inner.write();
-        inner.primary.retain(|b| b.addr.ip() != ip);
-        inner.backup.retain(|b| b.addr.ip() != ip);
+    fn isolate_backend(&self, backend: &Backend) {
+        let inner = self.inner.read();
+        let active_count = inner.primary.iter().filter(|b| b.is_selectable()).count();
         drop(inner);
         
-        self.ip_set.write().remove(&ip);
+        if active_count - 1 < self.min_active_target {
+            self.evict_worst_and_refill();
+        }
+        
+        backend.mark_isolated();
+    }
+
+    fn evict_worst_and_refill(&self) {
+        let mut inner = self.inner.write();
+        
+        let pool_avg_delay = self.calculate_pool_avg_delay(&inner.primary);
+        let pool_avg_loss = self.calculate_pool_avg_loss(&inner.primary);
+        
+        let worst = inner.primary.iter()
+            .filter(|b| !b.is_removed())
+            .max_by(|a, b| {
+                let score_a = a.calculate_score(pool_avg_delay, pool_avg_loss);
+                let score_b = b.calculate_score(pool_avg_delay, pool_avg_loss);
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        
+        if let Some(worst_backend) = worst {
+            let addr = worst_backend.addr;
+            worst_backend.mark_removed();
+            inner.primary.retain(|b| !b.is_removed());
+            push_log("WARN", &format!("[×] {} 被淘汰 (评分最差)", addr));
+            
+            if !inner.backup.is_empty() {
+                let promoted = inner.backup.remove(0);
+                let promoted_addr = promoted.addr;
+                promoted.mark_active();
+                inner.primary.push(promoted);
+                push_log("INFO", &format!("[↑] {} 从备选补充到负载均衡队列", promoted_addr));
+            }
+        }
+        
+        drop(inner);
         self.notify_resume();
     }
 
@@ -643,27 +660,19 @@ impl LoadBalancer {
         source: &str,
         interval: Duration,
     ) {
-        let (backends, is_primary) = if source == "主队列" {
-            {
-                let mut inner = self.inner.write();
-                self.check_warming_backends(&mut inner.primary);
-            }
-            (self.get_primary_backends(), true)
-        } else {
-            {
-                let mut inner = self.inner.write();
-                self.check_warming_backends(&mut inner.backup);
-            }
-            (self.get_backup_backends(), false)
+        let is_primary = source == "主队列";
+        
+        let backends = {
+            let mut inner = self.inner.write();
+            let pool = if is_primary { &mut inner.primary } else { &mut inner.backup };
+            self.check_warming_backends(pool);
+            pool.clone()
         };
         
         if backends.is_empty() {
-            let current_ms = now_ms();
-            if is_primary {
-                self.next_primary_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
-            } else {
-                self.next_health_check_ms.store(current_ms + interval.as_millis() as u64, Ordering::Relaxed);
-            }
+            let next_ms = now_ms() + interval.as_millis() as u64;
+            let target = if is_primary { &self.next_primary_health_check_ms } else { &self.next_health_check_ms };
+            target.store(next_ms, Ordering::Relaxed);
             return;
         }
 
@@ -745,88 +754,74 @@ impl LoadBalancer {
         lb: Arc<LoadBalancer>,
         source: &str,
     ) -> bool {
-        let mark_draining_and_refill = |backend: &Arc<Backend>| {
-            backend.mark_draining();
-            if source == "主队列" {
-                lb.refill_from_backup();
+        let is_primary = source == "主队列";
+
+        enum Action {
+            None,
+            Recover,
+            Isolate,
+            Remove(String),
+        }
+
+        let action = match result {
+            Some(detail) if detail.colo_mismatch => {
+                Action::Remove(format!("数据中心[{}]不匹配", detail.colo.as_deref().unwrap_or("未知")))
             }
-        };
-
-        match result {
             Some(detail) => {
-                if detail.colo_mismatch {
-                    let colo_str = detail.colo.as_deref().unwrap_or("未知");
-                    push_log("WARN", &format!("[-] {} 数据中心[{}]不匹配", backend.addr, colo_str));
-                    backend.mark_draining();
-                    lb.remove_backend(backend);
-                    if source == "主队列" {
-                        lb.refill_from_backup();
-                    }
-                    return true;
-                }
-
                 backend.record_delay(detail.delay);
                 if let Some(c) = detail.colo {
                     backend.set_colo(Some(c));
                 }
-                
-                let is_loss = detail.success_count < get_global_config().ping_times;
-                backend.record_loss(is_loss);
-                
-                let sample_count = backend.get_sample_count();
-                if sample_count < get_global_config().sample_window as usize {
-                    return false;
-                }
-                
-                let avg_delay = backend.get_avg_delay();
-                let loss_rate = backend.get_loss_rate();
-                
-                if avg_delay > delay_threshold || loss_rate > loss_threshold {
-                    backend.record_failure();
-                    
-                    let failures = backend.consecutive_failures();
-                    if failures >= 3 {
-                        push_log("WARN", &format!("[→] {} 进入排水状态 (连续{}次失败)", 
-                            backend.addr, failures));
-                        mark_draining_and_refill(&backend);
-                        true
-                    } else {
-                        push_log("WARN", &format!("[!] {} 性能异常 (延迟{:.0}ms 丢包{:.0}%) 第{}次", 
-                            backend.addr, avg_delay, loss_rate * 100.0, failures));
-                        false
-                    }
+                backend.record_loss(detail.success_count < get_global_config().ping_times);
+
+                if backend.get_sample_count() < get_global_config().sample_window as usize {
+                    Action::None
+                } else if backend.get_avg_delay() > delay_threshold || backend.get_loss_rate() > loss_threshold {
+                    if is_primary { Action::Isolate } else { Action::Remove("性能不达标".into()) }
                 } else {
-                    backend.record_success();
-                    false
+                    Action::Recover
                 }
             }
             None => {
                 backend.record_loss(true);
                 backend.record_failure();
-                
-                let sample_count = backend.get_sample_count();
-                if sample_count < get_global_config().sample_window as usize {
-                    return false;
-                }
-                
+
                 let loss_rate = backend.get_loss_rate();
                 let failures = backend.consecutive_failures();
-                
-                if loss_rate > loss_threshold && failures >= 3 {
-                    push_log("WARN", &format!("[→] {} 进入排水状态 (丢包{:.0}% 连续{}次失败)", 
-                        backend.addr, loss_rate * 100.0, failures));
-                    mark_draining_and_refill(&backend);
-                    true
-                } else if failures >= 3 {
-                    push_log("WARN", &format!("[→] {} 进入排水状态 (连续{}次无响应)", 
-                        backend.addr, failures));
-                    mark_draining_and_refill(&backend);
-                    true
+                let over_limit = loss_rate > loss_threshold || failures >= 3;
+
+                if backend.get_sample_count() >= get_global_config().sample_window as usize && over_limit {
+                    if is_primary { Action::Isolate } else { Action::Remove("无响应".into()) }
                 } else {
-                    push_log("WARN", &format!("[!] {} 无响应 第{}次", backend.addr, failures));
-                    false
+                    Action::None
                 }
             }
+        };
+
+        match action {
+            Action::Isolate => {
+                lb.isolate_backend(&backend);
+                push_log("WARN", &format!("[→] {} 隔离 (延迟{:.0}ms 丢包{:.0}%)",
+                    backend.addr, backend.get_avg_delay(), backend.get_loss_rate() * 100.0));
+                true
+            }
+            Action::Remove(reason) => {
+                backend.mark_removed();
+                push_log("WARN", &format!("[-] {} 移除 ({})", backend.addr, reason));
+                if is_primary {
+                    lb.refill_from_backup();
+                }
+                true
+            }
+            Action::Recover => {
+                backend.record_success();
+                if backend.is_isolated() {
+                    backend.mark_active();
+                    push_log("INFO", &format!("[←] {} 恢复正常", backend.addr));
+                }
+                false
+            }
+            Action::None => false,
         }
     }
 }

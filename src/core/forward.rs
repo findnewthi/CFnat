@@ -106,15 +106,7 @@ async fn handle_client(
         lb.record_loss(&backend, false);
     }
 
-    let should_evict = lb.check_and_evict(&backend);
-    
-    if should_evict {
-        let avg_delay = backend.get_avg_delay();
-        let delay_threshold = lb.get_delay_threshold();
-        lb.remove_backend(backend.clone());
-        lb.refill_from_backup();
-        push_log("WARN", &format!("[-] {} 延迟{:.0}ms>{:.0}ms (请求触发)", backend.addr, avg_delay, delay_threshold));
-    }
+    lb.check_and_evict(&backend);
 
     lb.release(&backend);
     result?;

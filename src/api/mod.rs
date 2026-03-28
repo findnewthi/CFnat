@@ -6,14 +6,17 @@ pub use handlers::*;
 pub use routes::create_router;
 pub use sse::stream_updates;
 
+use serde::{Deserialize, Serialize, Serializer};
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+#[cfg(feature = "web")]
 use axum::{
     http::{header, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+#[cfg(feature = "web")]
 use rust_embed::RustEmbed;
-use serde::{Deserialize, Serialize, Serializer};
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 use crate::core::ServiceState;
 
@@ -184,10 +187,12 @@ pub struct ApiResponse {
     pub message: String,
 }
 
+#[cfg(feature = "web")]
 #[derive(RustEmbed)]
 #[folder = "flutter/build/web"]
 struct Assets;
 
+#[cfg(feature = "web")]
 fn get_mime_type(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("js") => "application/javascript",
@@ -196,7 +201,13 @@ fn get_mime_type(path: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "web")]
 pub async fn serve_embedded_files(uri: Uri) -> Response {
+    use axum::{
+        http::{header, StatusCode},
+        response::IntoResponse,
+    };
+    
     let path = uri.path().trim_start_matches('/');
     
     if path.is_empty() || path == "index.html" {

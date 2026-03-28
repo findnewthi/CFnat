@@ -59,7 +59,7 @@ class StatusData {
       running: false,
       uptimeSecs: 0,
       nextHealthCheck: 0,
-      healthCheckInterval: 25,
+      healthCheckInterval: 0,
       primaryCount: 0,
       primaryTarget: 0,
       backupCount: 0,
@@ -72,23 +72,21 @@ class StatusData {
 
   factory StatusData.fromJson(Map<String, dynamic> json) {
     return StatusData(
-      running: json['running'] ?? false,
-      uptimeSecs: json['uptime_secs'] ?? 0,
-      nextHealthCheck: json['next_health_check'] ?? 0,
-      healthCheckInterval: json['health_check_interval'] ?? 25,
-      primaryCount: json['primary_count'] ?? 0,
-      primaryTarget: json['primary_target'] ?? 0,
-      backupCount: json['backup_count'] ?? 0,
-      backupTarget: json['backup_target'] ?? 0,
-      stickyIps: (json['sticky_ips'] as List?)
-          ?.map((e) => e as String)
-          .toList() ?? [],
-      primaryIps: (json['primary_ips'] as List?)
-          ?.map((e) => IpInfo.fromJson(e))
-          .toList() ?? [],
-      backupIps: (json['backup_ips'] as List?)
-          ?.map((e) => IpInfo.fromJson(e))
-          .toList() ?? [],
+      running: json['running'] as bool,
+      uptimeSecs: json['uptime_secs'] as int,
+      nextHealthCheck: json['next_health_check'] as int,
+      healthCheckInterval: json['health_check_interval'] as int,
+      primaryCount: json['primary_count'] as int,
+      primaryTarget: json['primary_target'] as int,
+      backupCount: json['backup_count'] as int,
+      backupTarget: json['backup_target'] as int,
+      stickyIps: (json['sticky_ips'] as List).cast<String>(),
+      primaryIps: (json['primary_ips'] as List)
+          .map((e) => IpInfo.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      backupIps: (json['backup_ips'] as List)
+          .map((e) => IpInfo.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 }
@@ -110,11 +108,11 @@ class IpInfo {
 
   factory IpInfo.fromJson(Map<String, dynamic> json) {
     return IpInfo(
-      ip: json['ip'] ?? '',
-      colo: json['colo'],
-      delay: (json['delay'] ?? 0).toDouble(),
-      loss: (json['loss'] ?? 0).toDouble(),
-      samples: json['samples'] ?? 0,
+      ip: json['ip'] as String,
+      colo: json['colo'] as String?,
+      delay: (json['delay'] as num).toDouble(),
+      loss: (json['loss'] as num).toDouble(),
+      samples: json['samples'] as int,
     );
   }
 }
@@ -132,9 +130,9 @@ class LogEntry {
 
   factory LogEntry.fromJson(Map<String, dynamic> json) {
     return LogEntry(
-      timestamp: json['timestamp'] ?? '',
-      level: json['level'] ?? 'INFO',
-      message: json['message'] ?? '',
+      timestamp: json['timestamp'] as String,
+      level: json['level'] as String,
+      message: json['message'] as String,
     );
   }
 }
@@ -168,19 +166,17 @@ class ConfigData {
 
   factory ConfigData.fromJson(Map<String, dynamic> json) {
     return ConfigData(
-      addr: json['addr'] ?? '',
-      delayLimit: json['delay_limit'] ?? 500,
-      tlr: (json['tlr'] ?? 0.1).toDouble(),
-      ips: json['ips'] ?? 10,
-      threads: json['threads'] ?? 16,
-      tlsPort: json['tls_port'] ?? 443,
-      httpPort: json['http_port'] ?? 80,
-      colo: json['colo'] != null
-          ? List<String>.from(json['colo'])
-          : null,
-      http: json['http'] ?? '',
-      ipFile: json['ip_file'] ?? '',
-      maxStickySlots: json['max_sticky_slots'] ?? 5,
+      addr: json['addr'] as String,
+      delayLimit: json['delay_limit'] as int,
+      tlr: (json['tlr'] as num).toDouble(),
+      ips: json['ips'] as int,
+      threads: json['threads'] as int,
+      tlsPort: json['tls_port'] as int,
+      httpPort: json['http_port'] as int,
+      colo: (json['colo'] as List?)?.cast<String>(),
+      http: json['http'] as String,
+      ipFile: json['ip_file'] as String,
+      maxStickySlots: json['max_sticky_slots'] as int,
     );
   }
 }

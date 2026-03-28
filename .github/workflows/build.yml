@@ -159,7 +159,7 @@ jobs:
         run: |
           cargo install --locked cargo-zigbuild
           cargo update
-          cargo zigbuild --release --target ${{ matrix.target }} || cargo build --release --target ${{ matrix.target }}
+          cargo zigbuild --release --features web --target ${{ matrix.target }} || cargo build --release --features web --target ${{ matrix.target }}
 
       - name: 保存构建产物
         run: |

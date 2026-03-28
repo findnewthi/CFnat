@@ -221,7 +221,7 @@ jobs:
         run: |
           $version = "${{ needs.validate_version.outputs.version }}"
           $versionStr = $version -replace 'v', ''
-          @"
+          $content = @"
           [Setup]
           AppName=${{ env.APP_NAME }}
           AppVersion=$versionStr
@@ -229,9 +229,18 @@ jobs:
           OutputDir=.
           OutputBaseFilename=${{ env.APP_NAME }}-windows-x64-setup
           Compression=lzma2
+
           [Files]
-          Source="flutter\build\windows\x64\runner\Release\*"; DestDir="{app}"; Flags: ignoreversion recursesubdirs
-          "@ | Out-File -FilePath setup.iss -Encoding UTF8
+          Source: "flutter\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+
+          [Icons]
+          Name: "{group}\${{ env.APP_NAME }}"; Filename: "{app}\${{ env.APP_NAME }}.exe"
+          Name: "{commondesktop}\${{ env.APP_NAME }}"; Filename: "{app}\${{ env.APP_NAME }}.exe"
+
+          [Run]
+          Filename: "{app}\${{ env.APP_NAME }}.exe"; Description: "{cm:LaunchProgram,${{ env.APP_NAME }}}"; Flags: nowait postinstall skipifsilent
+          "@
+          $content | Out-File -FilePath setup.iss -Encoding UTF8 -NoNewline
 
       - name: 编译 Inno Setup 安装包
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
@@ -323,17 +332,18 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          cd flutter/build/linux/x64/release/bundle
+          BUNDLE_DIR="${{ github.workspace }}/flutter/build/linux/x64/release/bundle"
+          TEMP_DIR="${{ github.workspace }}/temp_tar_dir"
           
-          mkdir -p ../temp_bundle
-          cp -a . ../temp_bundle/
-          cd ../temp_bundle
+          rm -rf "$TEMP_DIR"
+          mkdir -p "$TEMP_DIR"
+          cp -r "$BUNDLE_DIR/." "$TEMP_DIR/"
           
-          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" .
-          mv "${{ env.APP_NAME }}-linux-x64.tar.gz" ${{ github.workspace }}/linux/
+          tar -czf "${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-x64.tar.gz" -C "$TEMP_DIR" .
           
-          cd ..
-          rm -rf temp_bundle
+          rm -rf "$TEMP_DIR"
+          
+          cd "$BUNDLE_DIR"
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
@@ -476,22 +486,24 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          BUNDLE_DIR=$(find flutter/build/linux -type d -name "bundle" | head -1)
+          BUNDLE_DIR=$(find ${{ github.workspace }}/flutter/build/linux -type d -name "bundle" | head -1)
           if [ -z "$BUNDLE_DIR" ]; then
             echo "错误：未找到 Flutter bundle 目录"
             exit 1
           fi
+          
+          echo "BUNDLE_DIR: $BUNDLE_DIR"
+          
+          TEMP_DIR="${{ github.workspace }}/temp_tar_dir"
+          rm -rf "$TEMP_DIR"
+          mkdir -p "$TEMP_DIR"
+          cp -r "$BUNDLE_DIR/." "$TEMP_DIR/"
+          
+          tar -czf "${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.tar.gz" -C "$TEMP_DIR" .
+          
+          rm -rf "$TEMP_DIR"
+          
           cd "$BUNDLE_DIR"
-          
-          mkdir -p ../temp_bundle
-          cp -a . ../temp_bundle/
-          cd ../temp_bundle
-          
-          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" .
-          mv "${{ env.APP_NAME }}-linux-arm64.tar.gz" ${{ github.workspace }}/linux/
-          
-          cd ..
-          rm -rf temp_bundle
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}

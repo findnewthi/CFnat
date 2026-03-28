@@ -213,11 +213,9 @@ jobs:
           Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
 
       - name: 安装 Inno Setup
-        run: |
-          Invoke-WebRequest -Uri "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe" -OutFile is.exe
-          Start-Process -Wait -FilePath "./is.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-"
-          Move-Item -Path "$env:ProgramFiles/Inno Setup 6/ISCC.exe" -Destination ./
-          Remove-Item is.exe -Force
+        uses: Minionguyjpro/Inno-Setup-Action@v1
+        with:
+          version: latest
 
       - name: 创建 Setup 安装脚本
         run: |
@@ -237,7 +235,7 @@ jobs:
 
       - name: 编译 Setup 安装包
         run: |
-          .\ISCC.exe setup.iss
+          iscc setup.iss
 
       - name: 上传 Windows 产物
         uses: actions/upload-artifact@v4
@@ -321,7 +319,7 @@ jobs:
           
           cd flutter/build/linux/x64/release/bundle
           
-          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" .
+          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" --exclude="*.tar.gz" --exclude="deb_root" .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
           rm -rf deb_root
@@ -385,11 +383,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.x'
-          channel: 'stable'
+      - name: 安装 Flutter (ARM64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip git
+          cd $HOME
+          git clone https://github.com/flutter/flutter.git -b stable --depth 1
+          echo "$HOME/flutter/bin" >> $GITHUB_PATH
+          $HOME/flutter/bin/flutter --version
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -464,7 +465,7 @@ jobs:
           fi
           cd "$BUNDLE_DIR"
           
-          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" .
+          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" --exclude="*.tar.gz" --exclude="deb_root" .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
           rm -rf deb_root
@@ -617,8 +618,9 @@ jobs:
             --window-pos 200 120 \
             --icon-size 100 \
             --app-drop-link 600 185 \
-            "$APP_PATH" \
-            "${{ env.APP_NAME }}-macos-x64.dmg"
+            --overwrite \
+            "${{ env.APP_NAME }}-macos-x64.dmg" \
+            "$APP_PATH"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4
@@ -719,8 +721,9 @@ jobs:
             --window-pos 200 120 \
             --icon-size 100 \
             --app-drop-link 600 185 \
-            "$APP_PATH" \
-            "${{ env.APP_NAME }}-macos-arm64.dmg"
+            --overwrite \
+            "${{ env.APP_NAME }}-macos-arm64.dmg" \
+            "$APP_PATH"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4

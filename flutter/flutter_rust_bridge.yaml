@@ -1,0 +1,3 @@
+rust_input: cfnat_flutter
+dart_output: lib/bridge_generated.dart
+rust_root: rust

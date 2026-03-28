@@ -195,7 +195,7 @@ jobs:
       - name: 编译 Rust 库 (Windows)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target x86_64-pc-windows-msvc
+          cargo zigbuild --release --target x86_64-pc-windows-msvc || cargo build --release --target x86_64-pc-windows-msvc
 
       - name: 构建 Windows
         run: |
@@ -307,6 +307,10 @@ jobs:
 
       - name: 复制 so 到输出目录
         run: |
+          echo "=== 检查 Rust 编译产物 ==="
+          ls -la flutter/rust/target/x86_64-unknown-linux-musl/release/ || echo "目录不存在"
+          echo "=== 检查 Flutter 输出目录 ==="
+          ls -la flutter/build/linux/x64/release/bundle/lib/ || echo "目录不存在"
           cp flutter/rust/target/x86_64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/linux/x64/release/bundle/lib/
 
       - name: 打包发布文件
@@ -380,12 +384,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.x'
-          channel: 'stable'
-
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -399,40 +397,53 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev
+          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev unzip curl
           sudo gem install fpm
+
+      - name: 安装 flutter-elinux
+        run: |
+          git clone https://github.com/sony/flutter-elinux.git
+          sudo mv flutter-elinux /opt/
+          echo "/opt/flutter-elinux/bin" >> $GITHUB_PATH
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
-      - name: 配置 Flutter 平台
+      - name: 准备 ARM64 sysroot
         run: |
-          cd flutter
-          flutter config --enable-linux-desktop
+          sudo apt install qemu-user-static
+          docker pull arm64v8/ubuntu:20.04
+          docker run --name arm64-sysroot arm64v8/ubuntu:20.04 /bin/bash -c "apt update && apt install -y clang cmake build-essential pkg-config libegl1-mesa-dev libxkbcommon-dev libgles2-mesa-dev libwayland-dev wayland-protocols libdrm-dev libgbm-dev libinput-dev libudev-dev libsystemd-dev libfontconfig1-dev"
+          mkdir -p ${{ github.workspace }}/arm64-sysroot
+          sudo docker cp arm64-sysroot:/ ${{ github.workspace }}/arm64-sysroot
 
       - name: 生成桥接代码
         run: |
           cd flutter
-          flutter pub get
+          /opt/flutter-elinux/bin/flutter-elinux pub get
           flutter_rust_bridge_codegen generate
 
       - name: 编译 Rust 库 (Linux ARM64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target aarch64-unknown-linux-musl
+          cargo zigbuild --release --target aarch64-unknown-linux-musl || cargo build --release --target aarch64-unknown-linux-musl
 
       - name: 构建 Linux ARM64
         run: |
           cd flutter
           VERSION="${{ needs.validate_version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
-          flutter build linux --release --target-platform linux-arm64 --build-name="$VERSION_NUM"
+          /opt/flutter-elinux/bin/flutter-elinux build elinux --release --target-arch=arm64 --target-sysroot=${{ github.workspace }}/arm64-sysroot --build-name="$VERSION_NUM"
 
       - name: 复制 so 到输出目录
         run: |
-          cp flutter/rust/target/aarch64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/linux/arm64/release/bundle/lib/
+          echo "=== 检查 Rust 编译产物 ==="
+          ls -la flutter/rust/target/aarch64-unknown-linux-musl/release/ || echo "目录不存在"
+          echo "=== 检查 Flutter 输出目录 ==="
+          ls -la flutter/build/elinux/arm64/release/bundle/lib/ || echo "目录不存在"
+          cp flutter/rust/target/aarch64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/elinux/arm64/release/bundle/lib/
 
       - name: 打包发布文件
         run: |
@@ -440,7 +451,7 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          cd flutter/build/linux/arm64/release/bundle
+          cd flutter/build/elinux/arm64/release/bundle
           
           tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" ./*
           mv *.tar.gz ${{ github.workspace }}/linux/
@@ -470,7 +481,7 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           
-          cp -r flutter/build/linux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
+          cp -r flutter/build/elinux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
           
           ln -s ../lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} AppDir/usr/bin/${{ env.APP_NAME }} || true
           
@@ -548,7 +559,7 @@ jobs:
       - name: 编译 Rust 库 (macOS AMD64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target x86_64-apple-darwin
+          cargo zigbuild --release --target x86_64-apple-darwin || cargo build --release --target x86_64-apple-darwin
 
       - name: 构建 macOS x64
         run: |
@@ -565,7 +576,7 @@ jobs:
       - name: 打包 DMG
         run: |
           cd flutter/build/macos
-          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 --hide-secondary Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-x64.dmg"
+          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-x64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4
@@ -624,7 +635,7 @@ jobs:
       - name: 编译 Rust 库 (macOS ARM64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target aarch64-apple-darwin
+          cargo zigbuild --release --target aarch64-apple-darwin || cargo build --release --target aarch64-apple-darwin
 
       - name: 构建 macOS arm64
         env:
@@ -643,7 +654,7 @@ jobs:
       - name: 打包 DMG
         run: |
           cd flutter/build/macos
-          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 --hide-secondary Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-arm64.dmg"
+          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-arm64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4

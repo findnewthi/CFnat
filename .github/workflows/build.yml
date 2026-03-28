@@ -53,6 +53,10 @@ jobs:
   build_flutter_web:
     name: 构建 Flutter Web
     runs-on: ubuntu-latest
+    env:
+      APP_PACKAGE_NAME: cfnat_manager
+      APP_DISPLAY_NAME: CFnat Manager
+      APP_SHORT_NAME: CFnat
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +76,14 @@ jobs:
           cd flutter
           flutter pub get
           flutter build web --release
+
+      - name: 替换标题
+        run: |
+          cd flutter/build/web
+          sed -i 's/<title>${{ env.APP_PACKAGE_NAME }}<\/title>/<title>${{ env.APP_DISPLAY_NAME }}<\/title>/g' index.html
+          sed -i 's/"name": "${{ env.APP_PACKAGE_NAME }}"/"name": "${{ env.APP_DISPLAY_NAME }}"/g' manifest.json
+          sed -i 's/"short_name": "${{ env.APP_PACKAGE_NAME }}"/"short_name": "${{ env.APP_SHORT_NAME }}"/g' manifest.json
+          sed -i 's/${{ env.APP_PACKAGE_NAME }}/${{ env.APP_DISPLAY_NAME }}/g' version.json
 
       - name: 上传 Flutter Web 产物
         uses: actions/upload-artifact@v4

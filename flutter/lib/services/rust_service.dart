@@ -1,21 +1,26 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../bridge_generated.dart/lib.dart' as rust;
-import 'api_service.dart';
+import 'app_service.dart';
 
-class RustService extends ChangeNotifier {
+class RustService extends AppService {
   StatusData? _status;
   ConfigData? _config;
   bool _initialized = false;
   String? _error;
   Timer? _pollTimer;
 
+  @override
   StatusData? get status => _status;
+  @override
   ConfigData? get config => _config;
   bool get initialized => _initialized;
   String? get error => _error;
+  @override
   bool get connected => _initialized;
+  @override
   bool get isRunning => _status?.running ?? false;
+  @override
   bool get isLoading => false;
 
   Future<void> initialize() async {
@@ -45,6 +50,7 @@ class RustService extends ChangeNotifier {
     super.dispose();
   }
 
+  @override
   Future<void> fetchStatus() async {
     try {
       final result = await rust.getStatus();
@@ -79,6 +85,7 @@ class RustService extends ChangeNotifier {
     }
   }
 
+  @override
   Future<void> fetchConfig() async {
     try {
       final result = await rust.getConfig();
@@ -100,6 +107,7 @@ class RustService extends ChangeNotifier {
     }
   }
 
+  @override
   Future<bool> startService({
     String? ipFile,
     String? http,
@@ -136,6 +144,7 @@ class RustService extends ChangeNotifier {
     }
   }
 
+  @override
   Future<bool> stopService() async {
     try {
       final success = await rust.stopService();
@@ -150,6 +159,7 @@ class RustService extends ChangeNotifier {
     }
   }
 
+  @override
   Future<List<LogEntry>> fetchLogs() async {
     try {
       final logs = await rust.getLogs();
@@ -164,6 +174,7 @@ class RustService extends ChangeNotifier {
     }
   }
 
+  @override
   Future<bool> clearLogs() async {
     try {
       await rust.clearLogs();

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
+import '../services/app_service.dart';
 
 class InfoPanel extends StatefulWidget {
-  final ApiService api;
+  final AppService service;
   final bool forceVertical;
   
-  const InfoPanel({super.key, required this.api, this.forceVertical = false});
+  const InfoPanel({super.key, required this.service, this.forceVertical = false});
 
   @override
   State<InfoPanel> createState() => _InfoPanelState();
@@ -15,8 +15,8 @@ class InfoPanel extends StatefulWidget {
 class _InfoPanelState extends State<InfoPanel> {
   @override
   Widget build(BuildContext context) {
-    return Selector<ApiService, (StatusData?, bool)>(
-      selector: (_, api) => (api.status, api.connected),
+    return Selector<AppService, (StatusData?, bool)>(
+      selector: (_, service) => (service.status, service.connected),
       builder: (context, data, child) {
         final (status, connected) = data;
         if (!connected) {

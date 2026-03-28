@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
+import '../services/app_service.dart';
 
 class ConfigPanel extends StatefulWidget {
-  final ApiService api;
+  final AppService service;
   final bool compact;
   
-  const ConfigPanel({super.key, required this.api, this.compact = false});
+  const ConfigPanel({super.key, required this.service, this.compact = false});
 
   @override
   State<ConfigPanel> createState() => _ConfigPanelState();
@@ -54,7 +54,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
   }
 
   void _initFromConfig() {
-    final config = widget.api.config;
+    final config = widget.service.config;
     if (config != null && !_initialized) {
       _speedTestFileController.text = config.ipFile;
       _dataCenterController.text = config.colo?.join(',') ?? '';
@@ -73,8 +73,8 @@ class _ConfigPanelState extends State<ConfigPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Selector<ApiService, (bool, bool, ConfigData?)>(
-      selector: (_, api) => (api.isRunning, api.connected, api.config),
+    return Selector<AppService, (bool, bool, ConfigData?)>(
+      selector: (_, service) => (service.isRunning, service.connected, service.config),
       builder: (context, data, child) {
         final (isRunning, connected, config) = data;
         _isRunning = isRunning;
@@ -418,7 +418,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           onPressed: _actionInProgress
               ? null
               : () async {
-                  await _runAction(() => widget.api.stopService(), '停止');
+                  await _runAction(() => widget.service.stopService(), '停止');
                 },
           icon: _actionInProgress
               ? const SizedBox(
@@ -444,7 +444,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
             ? null
             : () async {
                 await _runAction(
-                  () => widget.api.startService(
+                  () => widget.service.startService(
                     ipFile: _speedTestFileController.text.isNotEmpty 
                         ? _speedTestFileController.text : null,
                     http: _testAddressController.text.isNotEmpty 
@@ -483,8 +483,8 @@ class _ConfigPanelState extends State<ConfigPanel> {
   }
 
   Widget _buildStatusCard() {
-    return Selector<ApiService, (StatusData?, bool)>(
-      selector: (_, api) => (api.status, api.connected),
+    return Selector<AppService, (StatusData?, bool)>(
+      selector: (_, service) => (service.status, service.connected),
       builder: (context, data, child) {
         final (status, connected) = data;
         final isRunning = status?.running ?? false;
@@ -608,7 +608,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
   }
 
   Widget _buildLogPanel() {
-    return _LogPanel(api: widget.api);
+    return _LogPanel(service: widget.service);
   }
 
   String _formatUptime(int seconds) {
@@ -639,9 +639,9 @@ class _ConfigPanelState extends State<ConfigPanel> {
 }
 
 class _LogPanel extends StatefulWidget {
-  final ApiService api;
+  final AppService service;
   
-  const _LogPanel({required this.api});
+  const _LogPanel({required this.service});
 
   @override
   State<_LogPanel> createState() => _LogPanelState();
@@ -668,7 +668,7 @@ class _LogPanelState extends State<_LogPanel> {
   Future<void> _fetchLogs() async {
     if (_loading) return;
     _loading = true;
-    final logs = await widget.api.fetchLogs();
+    final logs = await widget.service.fetchLogs();
     if (mounted) {
       setState(() {
         _logs = logs;
@@ -706,7 +706,7 @@ class _LogPanelState extends State<_LogPanel> {
                 const SizedBox(width: 8),
                 InkWell(
                   onTap: () async {
-                    await widget.api.clearLogs();
+                    await widget.service.clearLogs();
                     await _fetchLogs();
                   },
                   borderRadius: BorderRadius.circular(4),

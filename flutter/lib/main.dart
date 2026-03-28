@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'screens/main_screen.dart';
 import 'services/rust_service.dart';
 import 'services/api_service.dart';
+import 'services/app_service.dart';
 import 'bridge_generated.dart/frb_generated.dart';
 
 Future<void> main() async {
@@ -24,7 +25,7 @@ class CFnatApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
+    return ChangeNotifierProvider<AppService>(
       create: (_) {
         if (isWeb) {
           return ApiService();

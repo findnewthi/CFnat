@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/api_service.dart';
+import '../services/app_service.dart';
 import '../widgets/config_panel.dart';
 import '../widgets/info_panel.dart';
 
@@ -19,8 +19,8 @@ class _MainScreenState extends State<MainScreen> {
         title: const Text('CFnat Manager'),
         centerTitle: true,
       ),
-      body: Consumer<ApiService>(
-        builder: (context, api, child) {
+      body: Consumer<AppService>(
+        builder: (context, service, child) {
           return LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
@@ -28,10 +28,10 @@ class _MainScreenState extends State<MainScreen> {
               final isNarrow = width < 680 || (width < 900 && height < 540);
 
               if (isNarrow) {
-                return _buildNarrowLayout(api);
+                return _buildNarrowLayout(service);
               }
 
-              return _buildFlexibleLayout(api);
+              return _buildFlexibleLayout(service);
             },
           );
         },
@@ -39,7 +39,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildNarrowLayout(ApiService api) {
+  Widget _buildNarrowLayout(AppService service) {
     final colorScheme = Theme.of(context).colorScheme;
     final dividerColor = Theme.of(context).dividerColor;
 
@@ -62,8 +62,8 @@ class _MainScreenState extends State<MainScreen> {
           Expanded(
             child: TabBarView(
               children: [
-                ConfigPanel(api: api, compact: true),
-                InfoPanel(api: api, forceVertical: true),
+                ConfigPanel(service: service, compact: true),
+                InfoPanel(service: service, forceVertical: true),
               ],
             ),
           ),
@@ -72,7 +72,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildFlexibleLayout(ApiService api) {
+  Widget _buildFlexibleLayout(AppService service) {
     return Row(
       children: [
         Flexible(
@@ -83,13 +83,13 @@ class _MainScreenState extends State<MainScreen> {
               minWidth: 320,
               maxWidth: 450,
             ),
-            child: ConfigPanel(api: api),
+            child: ConfigPanel(service: service),
           ),
         ),
         const VerticalDivider(width: 1),
         Flexible(
           flex: 7,
-          child: InfoPanel(api: api),
+          child: InfoPanel(service: service),
         ),
       ],
     );

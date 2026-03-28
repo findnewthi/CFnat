@@ -206,11 +206,11 @@ jobs:
 
       - name: 复制 DLL 到输出目录
         run: |
-          cp flutter/rust/target/x86_64-pc-windows-msvc/release/cfnat_flutter.dll flutter/build/windows/runner/Release/
+          cp flutter/rust/target/x86_64-pc-windows-msvc/release/cfnat_flutter.dll flutter/build/windows/x64/runner/Release/
 
       - name: 打包 Portable 版本
         run: |
-          Compress-Archive -Path "flutter/build/windows/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
+          Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
 
       - name: 安装 Inno Setup
         run: |
@@ -232,7 +232,7 @@ jobs:
           OutputBaseFilename=${{ env.APP_NAME }}-windows-x64-setup
           Compression=lzma2
           [Files]
-          Source="flutter\build\windows\runner\Release\*"; DestDir="{app}"; Flags: ignoreversion recursesubdirs
+          Source="flutter\build\windows\x64\runner\Release\*"; DestDir="{app}"; Flags: ignoreversion recursesubdirs
           "@ | Out-File -FilePath setup.iss -Encoding UTF8
 
       - name: 编译 Setup 安装包
@@ -321,19 +321,20 @@ jobs:
           
           cd flutter/build/linux/x64/release/bundle
           
-          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" ./*
+          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
+          rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
           mkdir -p deb_root/usr/local/bin
-          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          find . -maxdepth 1 -mindepth 1 ! -name deb_root -exec cp -r {} deb_root/usr/local/lib/${{ env.APP_NAME }}/ \;
           ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
           fpm -s dir -t deb -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-x64.deb -C deb_root usr
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
           mkdir -p deb_root/usr/local/bin
-          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          find . -maxdepth 1 -mindepth 1 ! -name deb_root -exec cp -r {} deb_root/usr/local/lib/${{ env.APP_NAME }}/ \;
           ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
           fpm -s dir -t rpm -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-x64.rpm -C deb_root usr
 
@@ -380,7 +381,7 @@ jobs:
     name: 构建 Linux arm64
     needs: [validate_version]
     if: ${{ inputs.build_linux_arm64 }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -392,23 +393,15 @@ jobs:
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-
-      - name: 安装 Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
 
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev
+          sudo apt-get install -y llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 ruby ruby-dev
           sudo gem install fpm
 
-      - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
+      - name: 安装 flutter_rust_bridge
         run: |
-          cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
       - name: 配置 Flutter 平台
@@ -425,22 +418,38 @@ jobs:
       - name: 编译 Rust 库 (Linux ARM64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target aarch64-unknown-linux-gnu || cargo build --release --target aarch64-unknown-linux-gnu
+          cargo build --release
 
       - name: 构建 Linux ARM64
         run: |
           cd flutter
           VERSION="${{ needs.validate_version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
-          flutter build linux --release --target-platform linux-arm64 --build-name="$VERSION_NUM"
+          flutter build linux --release --build-name="$VERSION_NUM"
+
+      - name: 检查 Flutter 输出目录
+        run: |
+          echo "=== Flutter 输出目录结构 ==="
+          ls -la flutter/build/linux/ || echo "目录不存在"
+          echo "=== x64 目录 ==="
+          ls -la flutter/build/linux/x64/release/bundle/ 2>/dev/null || echo "x64/bundle 不存在"
+          echo "=== arm64 目录 ==="
+          ls -la flutter/build/linux/arm64/release/bundle/ 2>/dev/null || echo "arm64/bundle 不存在"
 
       - name: 复制 so 到输出目录
         run: |
           echo "=== 检查 Rust 编译产物 ==="
-          ls -la flutter/rust/target/aarch64-unknown-linux-gnu/release/ || echo "目录不存在"
+          ls -la flutter/rust/target/release/ || echo "目录不存在"
           find flutter/rust/target -name "libcfnat_flutter*" || echo "无 libcfnat_flutter 文件"
-          mkdir -p flutter/build/linux/arm64/release/bundle/lib
-          cp flutter/rust/target/aarch64-unknown-linux-gnu/release/libcfnat_flutter.so flutter/build/linux/arm64/release/bundle/lib/
+          
+          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_DIR" ]; then
+            echo "错误：未找到 Flutter bundle 目录"
+            exit 1
+          fi
+          echo "使用 bundle 目录: $BUNDLE_DIR"
+          mkdir -p "$BUNDLE_DIR/lib"
+          cp flutter/rust/target/release/libcfnat_flutter.so "$BUNDLE_DIR/lib/"
 
       - name: 打包发布文件
         run: |
@@ -448,21 +457,27 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          cd flutter/build/linux/arm64/release/bundle
+          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_DIR" ]; then
+            echo "错误：未找到 Flutter bundle 目录"
+            exit 1
+          fi
+          cd "$BUNDLE_DIR"
           
-          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" ./*
+          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
+          rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
           mkdir -p deb_root/usr/local/bin
-          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          find . -maxdepth 1 -mindepth 1 ! -name deb_root -exec cp -r {} deb_root/usr/local/lib/${{ env.APP_NAME }}/ \;
           ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
           fpm -s dir -t deb -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.deb -C deb_root usr
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
           mkdir -p deb_root/usr/local/bin
-          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          find . -maxdepth 1 -mindepth 1 ! -name deb_root -exec cp -r {} deb_root/usr/local/lib/${{ env.APP_NAME }}/ \;
           ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
           fpm -s dir -t rpm -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.rpm -C deb_root usr
 
@@ -473,12 +488,18 @@ jobs:
 
       - name: 创建 AppImage
         run: |
+          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_DIR" ]; then
+            echo "错误：未找到 Flutter bundle 目录"
+            exit 1
+          fi
+          
           mkdir -p AppDir/usr/lib/${{ env.APP_NAME }}
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           
-          cp -r flutter/build/linux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
+          cp -r "$BUNDLE_DIR"/* AppDir/usr/lib/${{ env.APP_NAME }}/
           
           ln -s ../lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} AppDir/usr/bin/${{ env.APP_NAME }} || true
           
@@ -565,9 +586,21 @@ jobs:
           VERSION_NUM="${VERSION#v}"
           flutter build macos --release --build-name="$VERSION_NUM"
 
+      - name: 检查 macOS 构建输出
+        run: |
+          echo "=== macOS 构建目录 ==="
+          ls -la flutter/build/macos/ || echo "目录不存在"
+          echo "=== Products/Release 目录 ==="
+          ls -la flutter/build/macos/Build/Products/Release/ || echo "目录不存在"
+
       - name: 复制 dylib 到 app
         run: |
           APP_PATH=$(find flutter/build/macos/Build/Products/Release -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "错误：未找到 .app 文件"
+            exit 1
+          fi
+          echo "找到 app: $APP_PATH"
           cp flutter/rust/target/x86_64-apple-darwin/release/libcfnat_flutter.dylib "$APP_PATH/Contents/MacOS/"
 
       - name: 打包 DMG
@@ -655,9 +688,21 @@ jobs:
           VERSION_NUM="${VERSION#v}"
           flutter build macos --release --build-name="$VERSION_NUM"
 
+      - name: 检查 macOS 构建输出
+        run: |
+          echo "=== macOS 构建目录 ==="
+          ls -la flutter/build/macos/ || echo "目录不存在"
+          echo "=== Products/Release 目录 ==="
+          ls -la flutter/build/macos/Build/Products/Release/ || echo "目录不存在"
+
       - name: 复制 dylib 到 app
         run: |
           APP_PATH=$(find flutter/build/macos/Build/Products/Release -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "错误：未找到 .app 文件"
+            exit 1
+          fi
+          echo "找到 app: $APP_PATH"
           cp flutter/rust/target/aarch64-apple-darwin/release/libcfnat_flutter.dylib "$APP_PATH/Contents/MacOS/"
 
       - name: 打包 DMG

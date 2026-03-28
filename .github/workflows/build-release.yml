@@ -1,0 +1,335 @@
+name: 构建 Flutter 安装包
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 1.0.0，必须大于最新版本)'
+        type: string
+        required: true
+      build_android:
+        description: '构建 Android APK'
+        type: boolean
+        default: true
+      build_windows:
+        description: '构建 Windows'
+        type: boolean
+        default: true
+      build_linux:
+        description: '构建 Linux'
+        type: boolean
+        default: false
+      build_macos:
+        description: '构建 macOS'
+        type: boolean
+        default: false
+
+env:
+  APP_NAME: CFnat
+
+jobs:
+  validate_version:
+    name: 验证版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 验证版本号
+        id: validate
+        run: |
+          git fetch --tags
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          latest=${latest#v}
+          input_version="${{ github.event.inputs.version }}"
+          input_version=${input_version#v}
+          echo "最新Tag: $latest"
+          echo "输入版本: $input_version"
+
+          latest_arr=(${latest//./ })
+          input_arr=(${input_version//./ })
+
+          valid=true
+          for i in 0 1 2; do
+            l=${latest_arr[$i]:-0}
+            n=${input_arr[$i]:-0}
+            if [[ $n -gt $l ]]; then
+              valid=true
+              break
+            elif [[ $n -lt $l ]]; then
+              valid=false
+              break
+            fi
+          done
+
+          if [[ "$valid" == "false" ]]; then
+            echo "错误: 输入版本 $input_version 必须大于最新版本 $latest"
+            exit 1
+          fi
+
+          echo "版本验证通过"
+          version="${{ github.event.inputs.version }}"
+          if [[ ! "$version" == v* ]]; then
+            version="v$version"
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+  build_android:
+    name: 构建 Android APK
+    needs: [validate_version]
+    if: ${{ inputs.build_android }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Flutter SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 配置 Flutter 平台
+        run: |
+          cd flutter
+          flutter config --enable-android
+
+      - name: 构建 Android APK
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build apk --release --split-per-abi
+
+      - name: 重命名产物
+        run: |
+          cd flutter/build/app/outputs/flutter-apk
+          version=${{ needs.validate_version.outputs.version }}
+          for apk in app-*-release.apk; do
+            arch=$(echo "$apk" | sed 's/app-\(.*\)-release.apk/\1/')
+            cp "$apk" ${{ env.APP_NAME }}-android-${arch}-${version#v}.apk
+          done
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: flutter/build/app/outputs/flutter-apk/*.apk
+
+  build_windows:
+    name: 构建 Windows
+    needs: [validate_version]
+    if: ${{ inputs.build_windows }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Flutter SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\Pub\Cache
+          key: ${{ runner.os }}-pub
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 配置 Flutter 平台
+        run: |
+          cd flutter
+          flutter config --enable-windows-desktop
+
+      - name: 构建 Windows
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build windows --release
+
+      - name: 打包 Portable 版本
+        run: |
+          $version = "${{ needs.validate_version.outputs.version }}"
+          $versionStr = $version -replace 'v', ''
+          $zipName = "${{ env.APP_NAME }}-windows-x64-${versionStr}.zip"
+          Compress-Archive -Path "flutter/build/windows/runner/Release/*" -DestinationPath "$zipName"
+
+      - name: 安装 Inno Setup
+        run: |
+          Invoke-WebRequest -Uri "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe" -OutFile is.exe
+          Start-Process -Wait -FilePath "./is.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-"
+          Move-Item -Path "$env:ProgramFiles/Inno Setup 6/ISCC.exe" -Destination ./
+          Remove-Item is.exe -Force
+
+      - name: 创建 Setup 安装脚本
+        run: |
+          $version = "${{ needs.validate_version.outputs.version }}"
+          $versionStr = $version -replace 'v', ''
+          @"
+          [Setup]
+          AppName=${{ env.APP_NAME }}
+          AppVersion=$versionStr
+          DefaultDirName={autopf}\${{ env.APP_NAME }}
+          OutputDir=.
+          OutputBaseFilename=${{ env.APP_NAME }}-windows-x64-setup-${versionStr}
+          Compression=lzma2
+          [Files]
+          Source="flutter\build\windows\runner\Release\*"; DestDir="{app}"; Flags: ignoreversion recursesubdirs
+          "@ | Out-File -FilePath setup.iss -Encoding UTF8
+
+      - name: 编译 Setup 安装包
+        run: |
+          .\ISCC.exe setup.iss
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            *.zip
+            *.exe
+
+  build_linux:
+    name: 构建 Linux
+    needs: [validate_version]
+    if: ${{ inputs.build_linux }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Flutter SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-pub
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 配置 Flutter 平台
+        run: |
+          cd flutter
+          flutter config --enable-linux-desktop
+
+      - name: 安装 fpm
+        run: |
+          gem install fpm
+
+      - name: 安装 Linux 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang libgtk-3-dev pkg-config
+
+      - name: 构建 Linux
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build linux --release
+
+      - name: 打包发布文件
+        run: |
+          cd flutter/build/linux/x64/release/bundle
+          version=${{ needs.validate_version.outputs.version }}
+          versionStr=${version#v}
+          tar -czf "${{ env.APP_NAME }}-linux-x64-${versionStr}.tar.gz" ./*
+          mkdir -p ${{ github.workspace }}/linux
+          mv *.tar.gz ${{ github.workspace }}/linux/
+          mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
+          mkdir -p deb_root/usr/local/bin
+          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          cp lib/${{ env.APP_NAME }} deb_root/usr/local/bin/
+          fpm -s dir -t deb -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-x64-${versionStr}.deb -C deb_root usr
+          rm -rf deb_root
+          mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
+          mkdir -p deb_root/usr/local/bin
+          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          cp lib/${{ env.APP_NAME }} deb_root/usr/local/bin/
+          fpm -s dir -t rpm -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-x64-${versionStr}.rpm -C deb_root usr
+
+      - name: 上传 Linux 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: linux/*
+
+  build_macos:
+    name: 构建 macOS
+    needs: [validate_version]
+    if: ${{ inputs.build_macos }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Flutter SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Pub
+          key: ${{ runner.os }}-pub
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 配置 Flutter 平台
+        run: |
+          cd flutter
+          flutter config --enable-macos-desktop
+
+      - name: 安装 create-dmg
+        run: |
+          brew install create-dmg
+
+      - name: 构建 macOS
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build macos --release
+
+      - name: 打包 dmg
+        run: |
+          cd flutter/build/macos
+          version=${{ needs.validate_version.outputs.version }}
+          versionStr=${version#v}
+          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 --hide-secondary Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-${versionStr}.dmg"
+
+      - name: 上传 macOS 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: flutter/build/macos/*.dmg
+
+  create_release:
+    name: 创建 Release
+    needs: [build_android, build_windows, build_linux, build_macos, validate_version]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: '*'
+          merge-multiple: true
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "${{ env.APP_NAME }}"
+          tag_name: ${{ needs.validate_version.outputs.version }}
+          draft: false
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

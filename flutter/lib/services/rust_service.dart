@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../bridge_generated.dart/third_party/cfnat_flutter.dart' as rust;
+import '../bridge_generated.dart/lib.dart' as rust;
 import 'api_service.dart';
 
 class RustService extends ChangeNotifier {

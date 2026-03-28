@@ -501,6 +501,7 @@ jobs:
     if: ${{ inputs.build_macos_x64 || inputs.build_macos_arm64 }}
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x64
@@ -579,12 +580,13 @@ jobs:
 
       - name: 构建 macOS
         if: steps.check_enabled.outputs.enabled == 'true'
-        env:
-          FLUTTER_XCODE_ARCHS: ${{ matrix.arch == 'arm64' && 'arm64' || '' }}
         run: |
           cd flutter
           VERSION="${{ needs.validate_version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
+          if [ "${{ matrix.arch }}" == "arm64" ]; then
+            export FLUTTER_XCODE_ARCHS=arm64
+          fi
           flutter build macos --release --build-name="$VERSION_NUM"
 
       - name: 复制 dylib 到 app

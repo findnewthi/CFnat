@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use http::Method;
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 
+use crate::core::cancel::CancellationToken;
 use crate::core::config::get_global_config;
 use crate::core::hyper::{parse_url, send_request};
 use crate::core::ip::IpPool;

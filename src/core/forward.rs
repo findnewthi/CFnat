@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{self, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_util::sync::CancellationToken;
 
 use crate::core::backend::Backend;
+use crate::core::cancel::CancellationToken;
 use crate::core::loadbalancer::LoadBalancer;
 use crate::log::push_log;
 

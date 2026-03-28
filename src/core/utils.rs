@@ -2,14 +2,6 @@ use std::sync::Arc;
 
 use crate::core::backend::Backend;
 
-pub fn update_ewma(current: &mut f32, new_val: f32, is_first: bool, alpha: f32) {
-    if is_first {
-        *current = new_val;
-    } else {
-        *current = (*current * (1.0 - alpha)) + (new_val * alpha);
-    }
-}
-
 fn calculate_pool_avg<F>(backends: &[Arc<Backend>], get_value: F, default: f32) -> f32
 where
     F: Fn(&Backend) -> f32,

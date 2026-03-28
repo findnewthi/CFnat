@@ -3,9 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use parking_lot::RwLock;
-use tokio_util::sync::CancellationToken;
 
-use crate::core::{IpPool, LoadBalancer, HttpingConfig, build_hyper_client, parse_url, run_continuous_httping, run_forward};
+use crate::core::{IpPool, LoadBalancer, HttpingConfig, build_hyper_client, parse_url, run_continuous_httping, run_forward, CancellationToken};
 use crate::log::push_log;
 
 pub struct ServiceState {
@@ -102,8 +101,6 @@ impl ServiceState {
             return Err("未找到有效的 IP".to_string());
         }
 
-        crate::core::init_global_limiter(config.threads);
-
         let (_, host, _, _) = parse_url(&config.http)
             .ok_or("URL 解析失败")?;
 
@@ -115,7 +112,6 @@ impl ServiceState {
         let colo_filter = config.colo.clone();
 
         let cancel_token = CancellationToken::new();
-        let cancel_token_clone = cancel_token.clone();
         
         let lb = Arc::new(
             LoadBalancer::new(config.ips)
@@ -130,10 +126,11 @@ impl ServiceState {
                 .with_max_sticky_slots(config.max_sticky_slots),
         );
 
-        let cancel_token_for_storage = cancel_token.clone();
+        crate::core::init_global_limiter(config.threads);
+
         *self.ip_pool.write() = Some(ip_pool.clone());
         *self.loadbalancer.write() = Some(lb.clone());
-        *self.cancel_token.write() = Some(cancel_token_for_storage);
+        *self.cancel_token.write() = Some(cancel_token.clone());
         *self.start_time.write() = Some(Instant::now());
         self.running.store(true, Ordering::Relaxed);
 
@@ -143,11 +140,13 @@ impl ServiceState {
         let tls_port = config.tls_port;
         let http_port = config.http_port;
         let delay_limit = config.delay_limit;
+        let listen_addr = config.listen_addr;
+        let cancel_token_for_httping = cancel_token.clone();
 
         tokio::spawn(async move {
             run_continuous_httping(
                 ip_pool_clone,
-                lb_clone.clone(),
+                lb_clone,
                 &http,
                 HttpingConfig {
                     tls_port,
@@ -158,16 +157,13 @@ impl ServiceState {
                     client,
                 },
                 notify_rx,
-                cancel_token_clone,
+                cancel_token_for_httping,
             ).await;
         });
 
         lb.clone().start_health_check();
 
-        let listen_addr = config.listen_addr;
         let lb_forward = lb.clone();
-        let tls_port = config.tls_port;
-        let http_port = config.http_port;
         let forward_cancel_token = cancel_token.clone();
         
         tokio::spawn(async move {

@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod cancel;
 pub mod config;
 pub mod forward;
 pub mod httping;
@@ -10,6 +11,7 @@ pub mod service;
 pub mod utils;
 
 pub use backend::Backend;
+pub use cancel::CancellationToken;
 pub use config::Config;
 pub use forward::run_forward;
 pub use httping::{run_continuous_httping, HttpingConfig};

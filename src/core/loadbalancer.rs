@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
-use tokio_util::sync::CancellationToken;
 
 use crate::core::backend::Backend;
+use crate::core::cancel::CancellationToken;
 use crate::core::config::get_global_config;
 use crate::core::httping::{PingConfig, PingResultDetail};
 use crate::core::utils;
@@ -225,31 +225,18 @@ impl LoadBalancer {
     }
 
     fn select_from_slots(&self, slots: &[StickySlot], len: usize) -> Option<Arc<Backend>> {
+        let current_ms = now_ms();
+        let on_select = |slot: &StickySlot| {
+            slot.last_access_ms.store(current_ms, Ordering::Release);
+        };
+        
         if len == 1 {
-            let current_ms = now_ms();
-            slots[0].last_access_ms.store(current_ms, Ordering::Release);
+            on_select(&slots[0]);
             slots[0].backend.fetch_add_connection(1);
             return Some(slots[0].backend.clone());
         }
         
-        let i = self.primary_index.fetch_add(1, Ordering::Relaxed) % len;
-        let j = (i + len / 2) % len;
-        
-        let slot_i = slots.get(i)?;
-        let slot_j = slots.get(j)?;
-        
-        let idx = if slot_i.backend.connections() <= slot_j.backend.connections() {
-            i
-        } else {
-            j
-        };
-        
-        let slot = slots.get(idx)?;
-        let current_ms = now_ms();
-        slot.last_access_ms.store(current_ms, Ordering::Release);
-        slot.backend.fetch_add_connection(1);
-        
-        Some(slot.backend.clone())
+        Self::select_by_connection(slots, &self.primary_index, |s| &s.backend, |s| s.backend.clone(), on_select)
     }
 
     fn select_from_pool(&self, pool: &[Arc<Backend>], index: &AtomicUsize) -> Option<Arc<Backend>> {
@@ -263,11 +250,25 @@ impl LoadBalancer {
             return Some(pool[0].clone());
         }
         
+        Self::select_by_connection(pool, index, |b| b.as_ref(), |b| b.clone(), |_| {})
+    }
+
+    fn select_by_connection<T>(
+        items: &[T],
+        index: &AtomicUsize,
+        get_backend: impl Fn(&T) -> &Backend,
+        get_arc: impl Fn(&T) -> Arc<Backend>,
+        on_select: impl Fn(&T),
+    ) -> Option<Arc<Backend>> {
+        let len = items.len();
         let i = index.fetch_add(1, Ordering::Relaxed) % len;
         let j = (i + len / 2) % len;
         
-        let backend_i = pool.get(i)?;
-        let backend_j = pool.get(j)?;
+        let item_i = items.get(i)?;
+        let item_j = items.get(j)?;
+        
+        let backend_i = get_backend(item_i);
+        let backend_j = get_backend(item_j);
         
         let idx = if backend_i.connections() <= backend_j.connections() {
             i
@@ -275,9 +276,11 @@ impl LoadBalancer {
             j
         };
         
-        let backend = pool.get(idx)?;
-        backend.fetch_add_connection(1);
-        Some(backend.clone())
+        let item = items.get(idx)?;
+        on_select(item);
+        get_backend(item).fetch_add_connection(1);
+        
+        Some(get_arc(item))
     }
 
     fn maintain_sticky_slots(&self, pool: &[Arc<Backend>]) {
@@ -581,6 +584,24 @@ impl LoadBalancer {
         self.cancel_token.cancel();
     }
 
+    pub fn reset_pools(&self) {
+        let mut inner = self.inner.write();
+        let primary_count = inner.primary.len();
+        let backup_count = inner.backup.len();
+        inner.primary.clear();
+        inner.backup.clear();
+        drop(inner);
+        
+        self.ip_set.write().clear();
+        self.sticky_slots.write().clear();
+        
+        if primary_count > 0 || backup_count > 0 {
+            push_log("INFO", &format!("[重置] 清空后端池: 主队列 {} 个, 备选 {} 个", primary_count, backup_count));
+        }
+        
+        self.notify_resume();
+    }
+
     pub fn get_next_health_check_secs(&self) -> u64 {
         let next_ms = self.next_health_check_ms.load(Ordering::Relaxed);
         let current_ms = now_ms();
@@ -637,18 +658,32 @@ impl LoadBalancer {
             let mut primary_interval = tokio::time::interval(Duration::from_secs(120));
             primary_interval.tick().await;
 
+            let mut last_tick = Instant::now();
+            const TIME_JUMP_THRESHOLD: Duration = Duration::from_secs(180);
+            const NETWORK_RECOVERY_WAIT: Duration = Duration::from_secs(5);
+
             loop {
-                tokio::select! {
+                let is_primary = tokio::select! {
                     _ = cancel_token.cancelled() => {
                         push_log("INFO", "[健康检查] 收到停止信号，退出");
                         break;
                     }
-                    _ = backup_interval.tick() => {
-                        lb.run_backup_health_check(health_check_config.clone());
-                    }
-                    _ = primary_interval.tick() => {
-                        lb.run_primary_health_check(health_check_config.clone());
-                    }
+                    _ = backup_interval.tick() => false,
+                    _ = primary_interval.tick() => true,
+                };
+
+                let now = Instant::now();
+                if now.duration_since(last_tick) > TIME_JUMP_THRESHOLD {
+                    push_log("INFO", "[健康检查] 检测到时间跳跃，可能刚从休眠唤醒，重置后端池");
+                    lb.reset_pools();
+                    tokio::time::sleep(NETWORK_RECOVERY_WAIT).await;
+                }
+                last_tick = now;
+
+                if is_primary {
+                    lb.run_primary_health_check(health_check_config.clone());
+                } else {
+                    lb.run_backup_health_check(health_check_config.clone());
                 }
             }
         });

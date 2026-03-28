@@ -6,7 +6,7 @@ use axum::{
     response::{sse::Event, Sse},
 };
 use serde::Serialize;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 use super::{AppState, StatusResponse, StatusInfo, ServerConfig};
 
@@ -18,7 +18,7 @@ struct StreamUpdate {
 
 pub async fn stream_updates(
     State(state): State<AppState>,
-) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
         .map(move |_| {
             let service = &state.service;

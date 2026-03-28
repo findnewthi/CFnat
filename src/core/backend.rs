@@ -5,7 +5,6 @@ use std::time::Instant;
 use parking_lot::Mutex;
 
 use crate::core::config::get_global_config;
-use crate::core::utils;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -20,8 +19,8 @@ pub struct Backend {
     pub addr: SocketAddr,
     pub colo: Mutex<Option<String>>,
     connections: AtomicUsize,
-    avg_delay: Mutex<f32>,
-    avg_loss: Mutex<f32>,
+    avg_delay: AtomicU32,
+    avg_loss: AtomicU32,
     sample_count: AtomicUsize,
     state: AtomicU8,
     entered_state_at: Mutex<Instant>,
@@ -34,8 +33,8 @@ impl Backend {
             addr,
             colo: Mutex::new(None),
             connections: AtomicUsize::new(0),
-            avg_delay: Mutex::new(-1.0),
-            avg_loss: Mutex::new(-1.0),
+            avg_delay: AtomicU32::new((-1.0_f32).to_bits()),
+            avg_loss: AtomicU32::new((-1.0_f32).to_bits()),
             sample_count: AtomicUsize::new(0),
             state: AtomicU8::new(BackendState::Warming as u8),
             entered_state_at: Mutex::new(Instant::now()),
@@ -48,8 +47,8 @@ impl Backend {
             addr,
             colo: Mutex::new(colo),
             connections: AtomicUsize::new(0),
-            avg_delay: Mutex::new(initial_delay),
-            avg_loss: Mutex::new(initial_loss),
+            avg_delay: AtomicU32::new(initial_delay.to_bits()),
+            avg_loss: AtomicU32::new(initial_loss.to_bits()),
             sample_count: AtomicUsize::new(0),
             state: AtomicU8::new(BackendState::Warming as u8),
             entered_state_at: Mutex::new(Instant::now()),
@@ -65,33 +64,39 @@ impl Backend {
         self.colo.lock().clone()
     }
 
-    fn update_ewma(current: &mut f32, new_val: f32, is_first: bool) {
-        utils::update_ewma(current, new_val, is_first, get_global_config().alpha);
-    }
-
     pub fn record_delay(&self, delay_ms: f32) {
-        let is_first = self.sample_count.load(Ordering::Relaxed) == 0;
-        let mut lock = self.avg_delay.lock();
-        Self::update_ewma(&mut lock, delay_ms, is_first);
+        let is_first = self.sample_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            Some(if count == 0 { 1 } else { (count + 1).min(get_global_config().sample_window as usize) })
+        }).map(|old| old == 0).unwrap_or(false);
         
-        let _ = self.sample_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-            Some((count + 1).min(get_global_config().sample_window as usize))
-        });
+        let alpha = get_global_config().alpha;
+        self.avg_delay.fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+            let current = f32::from_bits(bits);
+            let new_val = if is_first { delay_ms } else { (current * (1.0 - alpha)) + (delay_ms * alpha) };
+            Some(new_val.to_bits())
+        }).ok();
     }
 
     pub fn record_loss(&self, is_loss: bool) {
-        let is_first = self.sample_count.load(Ordering::Relaxed) == 0;
-        let mut lock = self.avg_loss.lock();
+        let is_first = self.sample_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            Some(if count == 0 { 1 } else { (count + 1).min(get_global_config().sample_window as usize) })
+        }).map(|old| old == 0).unwrap_or(false);
+        
+        let alpha = get_global_config().alpha;
         let loss = if is_loss { 1.0 } else { 0.0 };
-        Self::update_ewma(&mut lock, loss, is_first);
+        self.avg_loss.fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+            let current = f32::from_bits(bits);
+            let new_val = if is_first { loss } else { (current * (1.0 - alpha)) + (loss * alpha) };
+            Some(new_val.to_bits())
+        }).ok();
     }
 
     pub fn get_avg_delay(&self) -> f32 {
-        self.avg_delay.lock().max(0.0)
+        f32::from_bits(self.avg_delay.load(Ordering::Acquire)).max(0.0)
     }
 
     pub fn get_loss_rate(&self) -> f32 {
-        self.avg_loss.lock().max(0.0)
+        f32::from_bits(self.avg_loss.load(Ordering::Acquire)).max(0.0)
     }
 
     pub fn get_sample_count(&self) -> usize {

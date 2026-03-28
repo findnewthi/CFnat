@@ -1,9 +1,11 @@
 pub mod args;
 pub mod log;
 
+#[cfg(feature = "web")]
 pub mod api;
 pub mod core;
 
+#[cfg(feature = "web")]
 pub use api::{create_router, AppState};
 pub use args::Args;
 pub use core::{

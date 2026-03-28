@@ -217,11 +217,6 @@ jobs:
         run: |
           Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
 
-      - name: 安装 Inno Setup
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
-        with:
-          version: latest
-
       - name: 创建 Setup 安装脚本
         run: |
           $version = "${{ needs.validate_version.outputs.version }}"
@@ -238,9 +233,10 @@ jobs:
           Source="flutter\build\windows\x64\runner\Release\*"; DestDir="{app}"; Flags: ignoreversion recursesubdirs
           "@ | Out-File -FilePath setup.iss -Encoding UTF8
 
-      - name: 编译 Setup 安装包
-        run: |
-          iscc setup.iss
+      - name: 编译 Inno Setup 安装包
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
+        with:
+          path: setup.iss
 
       - name: 上传 Windows 产物
         uses: actions/upload-artifact@v4
@@ -329,12 +325,15 @@ jobs:
           
           cd flutter/build/linux/x64/release/bundle
           
-          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" \
-            --exclude="*.tar.gz" \
-            --exclude="deb_root" \
-            --exclude="AppDir" \
-            .
-          mv *.tar.gz ${{ github.workspace }}/linux/
+          mkdir -p ../temp_bundle
+          cp -a . ../temp_bundle/
+          cd ../temp_bundle
+          
+          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" .
+          mv "${{ env.APP_NAME }}-linux-x64.tar.gz" ${{ github.workspace }}/linux/
+          
+          cd ..
+          rm -rf temp_bundle
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
@@ -484,12 +483,15 @@ jobs:
           fi
           cd "$BUNDLE_DIR"
           
-          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" \
-            --exclude="*.tar.gz" \
-            --exclude="deb_root" \
-            --exclude="AppDir" \
-            .
-          mv *.tar.gz ${{ github.workspace }}/linux/
+          mkdir -p ../temp_bundle
+          cp -a . ../temp_bundle/
+          cd ../temp_bundle
+          
+          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" .
+          mv "${{ env.APP_NAME }}-linux-arm64.tar.gz" ${{ github.workspace }}/linux/
+          
+          cd ..
+          rm -rf temp_bundle
           
           rm -rf deb_root
           mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}

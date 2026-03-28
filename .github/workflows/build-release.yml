@@ -181,6 +181,11 @@ jobs:
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
+      - name: 清理旧生成文件
+        run: |
+          Remove-Item -Path "flutter\rust\src\frb_generated*.rs" -Force -ErrorAction SilentlyContinue
+          cd flutter; flutter clean
+
       - name: 配置 Flutter 平台
         run: |
           cd flutter
@@ -213,7 +218,7 @@ jobs:
           Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
 
       - name: 安装 Inno Setup
-        uses: Minionguyjpro/Inno-Setup-Action@v1
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
         with:
           version: latest
 
@@ -280,6 +285,11 @@ jobs:
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
+      - name: 清理旧生成文件
+        run: |
+          rm -rf flutter/rust/src/frb_generated*.rs || true
+          cd flutter && flutter clean || true
+
       - name: 配置 Flutter 平台
         run: |
           cd flutter
@@ -319,7 +329,11 @@ jobs:
           
           cd flutter/build/linux/x64/release/bundle
           
-          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" --exclude="*.tar.gz" --exclude="deb_root" .
+          tar -czf "${{ env.APP_NAME }}-linux-x64.tar.gz" \
+            --exclude="*.tar.gz" \
+            --exclude="deb_root" \
+            --exclude="AppDir" \
+            .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
           rm -rf deb_root
@@ -391,24 +405,29 @@ jobs:
           git clone https://github.com/flutter/flutter.git -b stable --depth 1
           echo "$HOME/flutter/bin" >> $GITHUB_PATH
           $HOME/flutter/bin/flutter --version
+          $HOME/flutter/bin/flutter precache --linux
+          $HOME/flutter/bin/flutter config --enable-linux-desktop
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 安装依赖
+      - name: 安装系统依赖 (ARM64)
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 ruby ruby-dev
+          sudo apt-get install -y \
+            clang pkg-config ninja-build cmake \
+            libgtk-3-dev libfuse2 ruby ruby-dev \
+            libclang-dev libx11-dev libgl1-mesa-dev
           sudo gem install fpm
 
       - name: 安装 flutter_rust_bridge
         run: |
           cargo install flutter_rust_bridge_codegen
 
-      - name: 配置 Flutter 平台
+      - name: 清理旧生成文件
         run: |
-          cd flutter
-          flutter config --enable-linux-desktop
+          rm -rf flutter/rust/src/frb_generated*.rs || true
+          cd flutter && flutter clean || true
 
       - name: 生成桥接代码
         run: |
@@ -443,7 +462,7 @@ jobs:
           ls -la flutter/rust/target/release/ || echo "目录不存在"
           find flutter/rust/target -name "libcfnat_flutter*" || echo "无 libcfnat_flutter 文件"
           
-          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          BUNDLE_DIR=$(find flutter/build/linux -type d -name "bundle" | head -1)
           if [ -z "$BUNDLE_DIR" ]; then
             echo "错误：未找到 Flutter bundle 目录"
             exit 1
@@ -458,14 +477,18 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          BUNDLE_DIR=$(find flutter/build/linux -type d -name "bundle" | head -1)
           if [ -z "$BUNDLE_DIR" ]; then
             echo "错误：未找到 Flutter bundle 目录"
             exit 1
           fi
           cd "$BUNDLE_DIR"
           
-          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" --exclude="*.tar.gz" --exclude="deb_root" .
+          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" \
+            --exclude="*.tar.gz" \
+            --exclude="deb_root" \
+            --exclude="AppDir" \
+            .
           mv *.tar.gz ${{ github.workspace }}/linux/
           
           rm -rf deb_root
@@ -489,7 +512,7 @@ jobs:
 
       - name: 创建 AppImage
         run: |
-          BUNDLE_DIR=$(ls -d flutter/build/linux/*/release/bundle 2>/dev/null | head -1)
+          BUNDLE_DIR=$(find flutter/build/linux -type d -name "bundle" | head -1)
           if [ -z "$BUNDLE_DIR" ]; then
             echo "错误：未找到 Flutter bundle 目录"
             exit 1
@@ -555,14 +578,15 @@ jobs:
         run: |
           brew install llvm
 
-      - name: 安装 create-dmg
-        run: |
-          brew install create-dmg
-
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
+
+      - name: 清理旧生成文件
+        run: |
+          rm -rf flutter/rust/src/frb_generated*.rs || true
+          cd flutter && flutter clean || true
 
       - name: 配置 Flutter 平台
         run: |
@@ -613,14 +637,13 @@ jobs:
             ls -la Build/Products/Release
             exit 1
           fi
-          create-dmg \
-            --volname "${{ env.APP_NAME }}" \
-            --window-pos 200 120 \
-            --icon-size 100 \
-            --app-drop-link 600 185 \
-            --overwrite \
-            "${{ env.APP_NAME }}-macos-x64.dmg" \
-            "$APP_PATH"
+          
+          rm -f "${{ env.APP_NAME }}-macos-x64.dmg"
+          
+          hdiutil create -volname "${{ env.APP_NAME }}" \
+                         -srcfolder "$APP_PATH" \
+                         -ov -format UDZO \
+                         "${{ env.APP_NAME }}-macos-x64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4
@@ -655,10 +678,6 @@ jobs:
       - name: 安装 LLVM
         run: |
           brew install llvm
-
-      - name: 安装 create-dmg
-        run: |
-          brew install create-dmg
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |
@@ -716,14 +735,13 @@ jobs:
             ls -la Build/Products/Release
             exit 1
           fi
-          create-dmg \
-            --volname "${{ env.APP_NAME }}" \
-            --window-pos 200 120 \
-            --icon-size 100 \
-            --app-drop-link 600 185 \
-            --overwrite \
-            "${{ env.APP_NAME }}-macos-arm64.dmg" \
-            "$APP_PATH"
+          
+          rm -f "${{ env.APP_NAME }}-macos-arm64.dmg"
+          
+          hdiutil create -volname "${{ env.APP_NAME }}" \
+                         -srcfolder "$APP_PATH" \
+                         -ov -format UDZO \
+                         "${{ env.APP_NAME }}-macos-arm64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4

@@ -274,11 +274,8 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2
-
-      - name: 安装 fpm
-        run: |
-          gem install fpm
+          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 ruby ruby-dev
+          sudo gem install fpm
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |
@@ -402,11 +399,8 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: 安装 fpm
-        run: |
-          gem install fpm
+          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev
+          sudo gem install fpm
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |

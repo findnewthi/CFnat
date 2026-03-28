@@ -200,8 +200,8 @@ jobs:
       - name: 构建 Windows
         run: |
           cd flutter
-          VERSION="${{ needs.validate_version.outputs.version }}"
-          VERSION_NUM="${VERSION#v}"
+          $VERSION = "${{ needs.validate_version.outputs.version }}"
+          $VERSION_NUM = $VERSION -replace '^v', ''
           flutter build windows --release --build-name="$VERSION_NUM"
 
       - name: 复制 DLL 到输出目录
@@ -264,7 +264,7 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-gnu
 
       - name: 安装 Zig
         uses: mlugg/setup-zig@v2
@@ -274,7 +274,7 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 ruby ruby-dev
+          sudo apt-get install -y llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 ruby ruby-dev
           sudo gem install fpm
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
@@ -296,7 +296,7 @@ jobs:
       - name: 编译 Rust 库 (Linux x64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu || cargo build --release --target x86_64-unknown-linux-gnu
 
       - name: 构建 Linux
         run: |
@@ -308,10 +308,10 @@ jobs:
       - name: 复制 so 到输出目录
         run: |
           echo "=== 检查 Rust 编译产物 ==="
-          ls -la flutter/rust/target/x86_64-unknown-linux-musl/release/ || echo "目录不存在"
-          echo "=== 检查 Flutter 输出目录 ==="
-          ls -la flutter/build/linux/x64/release/bundle/lib/ || echo "目录不存在"
-          cp flutter/rust/target/x86_64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/linux/x64/release/bundle/lib/
+          ls -la flutter/rust/target/x86_64-unknown-linux-gnu/release/ || echo "目录不存在"
+          find flutter/rust/target -name "libcfnat_flutter*" || echo "无 libcfnat_flutter 文件"
+          mkdir -p flutter/build/linux/x64/release/bundle/lib
+          cp flutter/rust/target/x86_64-unknown-linux-gnu/release/libcfnat_flutter.so flutter/build/linux/x64/release/bundle/lib/
 
       - name: 打包发布文件
         run: |
@@ -384,10 +384,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
+          targets: aarch64-unknown-linux-gnu
 
       - name: 安装 Zig
         uses: mlugg/setup-zig@v2
@@ -397,53 +403,44 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev unzip curl
+          sudo apt-get install -y llvm clang libclang-dev ninja-build cmake pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ruby ruby-dev
           sudo gem install fpm
-
-      - name: 安装 flutter-elinux
-        run: |
-          git clone https://github.com/sony/flutter-elinux.git
-          sudo mv flutter-elinux /opt/
-          echo "/opt/flutter-elinux/bin" >> $GITHUB_PATH
 
       - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
         run: |
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
-      - name: 准备 ARM64 sysroot
+      - name: 配置 Flutter 平台
         run: |
-          sudo apt install qemu-user-static
-          docker pull arm64v8/ubuntu:20.04
-          docker run --name arm64-sysroot arm64v8/ubuntu:20.04 /bin/bash -c "apt update && apt install -y clang cmake build-essential pkg-config libegl1-mesa-dev libxkbcommon-dev libgles2-mesa-dev libwayland-dev wayland-protocols libdrm-dev libgbm-dev libinput-dev libudev-dev libsystemd-dev libfontconfig1-dev"
-          mkdir -p ${{ github.workspace }}/arm64-sysroot
-          sudo docker cp arm64-sysroot:/ ${{ github.workspace }}/arm64-sysroot
+          cd flutter
+          flutter config --enable-linux-desktop
 
       - name: 生成桥接代码
         run: |
           cd flutter
-          /opt/flutter-elinux/bin/flutter-elinux pub get
+          flutter pub get
           flutter_rust_bridge_codegen generate
 
       - name: 编译 Rust 库 (Linux ARM64)
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target aarch64-unknown-linux-musl || cargo build --release --target aarch64-unknown-linux-musl
+          cargo zigbuild --release --target aarch64-unknown-linux-gnu || cargo build --release --target aarch64-unknown-linux-gnu
 
       - name: 构建 Linux ARM64
         run: |
           cd flutter
           VERSION="${{ needs.validate_version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
-          /opt/flutter-elinux/bin/flutter-elinux build elinux --release --target-arch=arm64 --target-sysroot=${{ github.workspace }}/arm64-sysroot --build-name="$VERSION_NUM"
+          flutter build linux --release --target-platform linux-arm64 --build-name="$VERSION_NUM"
 
       - name: 复制 so 到输出目录
         run: |
           echo "=== 检查 Rust 编译产物 ==="
-          ls -la flutter/rust/target/aarch64-unknown-linux-musl/release/ || echo "目录不存在"
-          echo "=== 检查 Flutter 输出目录 ==="
-          ls -la flutter/build/elinux/arm64/release/bundle/lib/ || echo "目录不存在"
-          cp flutter/rust/target/aarch64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/elinux/arm64/release/bundle/lib/
+          ls -la flutter/rust/target/aarch64-unknown-linux-gnu/release/ || echo "目录不存在"
+          find flutter/rust/target -name "libcfnat_flutter*" || echo "无 libcfnat_flutter 文件"
+          mkdir -p flutter/build/linux/arm64/release/bundle/lib
+          cp flutter/rust/target/aarch64-unknown-linux-gnu/release/libcfnat_flutter.so flutter/build/linux/arm64/release/bundle/lib/
 
       - name: 打包发布文件
         run: |
@@ -451,7 +448,7 @@ jobs:
           versionStr=${version#v}
           mkdir -p ${{ github.workspace }}/linux
           
-          cd flutter/build/elinux/arm64/release/bundle
+          cd flutter/build/linux/arm64/release/bundle
           
           tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" ./*
           mv *.tar.gz ${{ github.workspace }}/linux/
@@ -481,7 +478,7 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           
-          cp -r flutter/build/elinux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
+          cp -r flutter/build/linux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
           
           ln -s ../lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} AppDir/usr/bin/${{ env.APP_NAME }} || true
           
@@ -576,7 +573,19 @@ jobs:
       - name: 打包 DMG
         run: |
           cd flutter/build/macos
-          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-x64.dmg"
+          APP_PATH=$(find Build/Products/Release -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "错误：未找到 .app 文件"
+            ls -la Build/Products/Release
+            exit 1
+          fi
+          create-dmg \
+            --volname "${{ env.APP_NAME }}" \
+            --window-pos 200 120 \
+            --icon-size 100 \
+            --app-drop-link 600 185 \
+            "$APP_PATH" \
+            "${{ env.APP_NAME }}-macos-x64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4
@@ -654,7 +663,19 @@ jobs:
       - name: 打包 DMG
         run: |
           cd flutter/build/macos
-          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-arm64.dmg"
+          APP_PATH=$(find Build/Products/Release -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "错误：未找到 .app 文件"
+            ls -la Build/Products/Release
+            exit 1
+          fi
+          create-dmg \
+            --volname "${{ env.APP_NAME }}" \
+            --window-pos 200 120 \
+            --icon-size 100 \
+            --app-drop-link 600 185 \
+            "$APP_PATH" \
+            "${{ env.APP_NAME }}-macos-arm64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4

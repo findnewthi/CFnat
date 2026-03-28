@@ -15,12 +15,20 @@ on:
         description: '构建 Windows'
         type: boolean
         default: false
-      build_linux:
-        description: '构建 Linux'
+      build_linux_x64:
+        description: '构建 Linux x64'
         type: boolean
         default: false
-      build_macos:
-        description: '构建 macOS'
+      build_linux_arm64:
+        description: '构建 Linux ARM64'
+        type: boolean
+        default: false
+      build_macos_x64:
+        description: '构建 macOS x64'
+        type: boolean
+        default: false
+      build_macos_arm64:
+        description: '构建 macOS ARM64'
         type: boolean
         default: false
 
@@ -235,10 +243,10 @@ jobs:
             *.zip
             *.exe
 
-  build_linux:
-    name: 构建 Linux
+  build_linux_x64:
+    name: 构建 Linux x64
     needs: [validate_version]
-    if: ${{ inputs.build_linux }}
+    if: ${{ inputs.build_linux_x64 }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -284,7 +292,7 @@ jobs:
           flutter pub get
           flutter_rust_bridge_codegen generate
 
-      - name: 编译 Rust 库 (Linux)
+      - name: 编译 Rust 库 (Linux x64)
         run: |
           cd flutter/rust
           cargo zigbuild --release --target x86_64-unknown-linux-musl
@@ -358,13 +366,139 @@ jobs:
       - name: 上传 Linux 产物
         uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: linux-x64
           path: linux/*
 
-  build_macos_amd64:
-    name: 构建 macOS AMD64
+  build_linux_arm64:
+    name: 构建 Linux arm64
     needs: [validate_version]
-    if: ${{ inputs.build_macos }}
+    if: ${{ inputs.build_linux_arm64 }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: 安装 Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools llvm clang libclang-dev ninja-build cmake libgtk-3-dev pkg-config libfuse2 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: 安装 fpm
+        run: |
+          gem install fpm
+
+      - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
+        run: |
+          cargo install --locked cargo-zigbuild
+          cargo install flutter_rust_bridge_codegen
+
+      - name: 配置 Flutter 平台
+        run: |
+          cd flutter
+          flutter config --enable-linux-desktop
+
+      - name: 生成桥接代码
+        run: |
+          cd flutter
+          flutter pub get
+          flutter_rust_bridge_codegen generate
+
+      - name: 编译 Rust 库 (Linux ARM64)
+        run: |
+          cd flutter/rust
+          cargo zigbuild --release --target aarch64-unknown-linux-musl
+
+      - name: 构建 Linux ARM64
+        run: |
+          cd flutter
+          flutter build linux --release --target-platform linux-arm64
+
+      - name: 复制 so 到输出目录
+        run: |
+          cp flutter/rust/target/aarch64-unknown-linux-musl/release/libcfnat_flutter.so flutter/build/linux/arm64/release/bundle/lib/
+
+      - name: 打包发布文件
+        run: |
+          version=${{ needs.validate_version.outputs.version }}
+          versionStr=${version#v}
+          mkdir -p ${{ github.workspace }}/linux
+          
+          cd flutter/build/linux/arm64/release/bundle
+          
+          tar -czf "${{ env.APP_NAME }}-linux-arm64.tar.gz" ./*
+          mv *.tar.gz ${{ github.workspace }}/linux/
+          
+          mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
+          mkdir -p deb_root/usr/local/bin
+          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
+          fpm -s dir -t deb -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.deb -C deb_root usr
+          
+          rm -rf deb_root
+          mkdir -p deb_root/usr/local/lib/${{ env.APP_NAME }}
+          mkdir -p deb_root/usr/local/bin
+          cp -r ./* deb_root/usr/local/lib/${{ env.APP_NAME }}/
+          ln -s /usr/local/lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} deb_root/usr/local/bin/${{ env.APP_NAME }} || true
+          fpm -s dir -t rpm -n ${{ env.APP_NAME }} -v ${versionStr} -p ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.rpm -C deb_root usr
+
+      - name: 下载 AppImageTool
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage -O appimagetool
+          chmod +x appimagetool
+
+      - name: 创建 AppImage
+        run: |
+          mkdir -p AppDir/usr/lib/${{ env.APP_NAME }}
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          
+          cp -r flutter/build/linux/arm64/release/bundle/* AppDir/usr/lib/${{ env.APP_NAME }}/
+          
+          ln -s ../lib/${{ env.APP_NAME }}/${{ env.APP_NAME }} AppDir/usr/bin/${{ env.APP_NAME }} || true
+          
+          echo "[Desktop Entry]" > AppDir/${{ env.APP_NAME }}.desktop
+          echo "Name=${{ env.APP_NAME }}" >> AppDir/${{ env.APP_NAME }}.desktop
+          echo "Exec=${{ env.APP_NAME }}" >> AppDir/${{ env.APP_NAME }}.desktop
+          echo "Icon=${{ env.APP_NAME }}" >> AppDir/${{ env.APP_NAME }}.desktop
+          echo "Type=Application" >> AppDir/${{ env.APP_NAME }}.desktop
+          echo "Categories=Network;" >> AppDir/${{ env.APP_NAME }}.desktop
+          
+          cp AppDir/${{ env.APP_NAME }}.desktop AppDir/usr/share/applications/
+          
+          if [ -f "flutter/linux/flutter/ephemeral/assets/icon.png" ]; then
+            cp flutter/linux/flutter/ephemeral/assets/icon.png AppDir/${{ env.APP_NAME }}.png
+          else
+            convert -size 256x256 xc:blue AppDir/${{ env.APP_NAME }}.png 2>/dev/null || echo "placeholder" > AppDir/${{ env.APP_NAME }}.png
+          fi
+          
+          ARCH=aarch64 ./appimagetool AppDir ${{ github.workspace }}/linux/${{ env.APP_NAME }}-linux-arm64.AppImage
+
+      - name: 上传 Linux 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: linux/*
+
+  build_macos_x64:
+    name: 构建 macOS x64
+    needs: [validate_version]
+    if: ${{ inputs.build_macos_x64 }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -427,18 +561,18 @@ jobs:
       - name: 打包 DMG
         run: |
           cd flutter/build/macos
-          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 --hide-secondary Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-amd64.dmg"
+          create-dmg --volname "${{ env.APP_NAME }}" --window-pos 200 120 --icon-size 100 --app-drop-link 600 185 --hide-secondary Build/Products/Release/*.app "${{ env.APP_NAME }}-macos-x64.dmg"
 
       - name: 上传 macOS 产物
         uses: actions/upload-artifact@v4
         with:
-          name: macos-amd64
+          name: macos-x64
           path: flutter/build/macos/*.dmg
 
   build_macos_arm64:
-    name: 构建 macOS ARM64
+    name: 构建 macOS arm64
     needs: [validate_version]
-    if: ${{ inputs.build_macos }}
+    if: ${{ inputs.build_macos_arm64 }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -513,7 +647,7 @@ jobs:
 
   create_release:
     name: 创建 Release
-    needs: [build_android, build_windows, build_linux, build_macos_amd64, build_macos_arm64, validate_version]
+    needs: [build_android, build_windows, build_linux_x64, build_linux_arm64, build_macos_x64, build_macos_arm64, validate_version]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:

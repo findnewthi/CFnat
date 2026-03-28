@@ -122,6 +122,7 @@ impl ServiceState {
                 .with_timeout(1800)
                 .with_notify(notify_tx)
                 .with_client(client.clone())
+                .with_server_name(host.clone())
                 .with_colo_filter(colo_filter.clone())
                 .with_max_sticky_slots(config.max_sticky_slots),
         );

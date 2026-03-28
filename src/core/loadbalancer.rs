@@ -53,7 +53,8 @@ pub struct LoadBalancer {
     notify_tx: Option<tokio::sync::watch::Sender<bool>>,
     delay_threshold: AtomicU32,
     loss_threshold: AtomicU32,
-    client: Option<Arc<crate::core::hyper::MyHyperClient>>,
+    client: RwLock<Option<Arc<crate::core::hyper::MyHyperClient>>>,
+    server_name: RwLock<String>,
     colo_filter: Option<Arc<Vec<String>>>,
     sticky_slots: RwLock<Vec<StickySlot>>,
     last_expand_ms: AtomicU64,
@@ -91,7 +92,8 @@ impl LoadBalancer {
             notify_tx: None,
             delay_threshold: AtomicU32::new(0.0f32.to_bits()),
             loss_threshold: AtomicU32::new(0.0f32.to_bits()),
-            client: None,
+            client: RwLock::new(None),
+            server_name: RwLock::new(String::new()),
             colo_filter: None,
             sticky_slots: RwLock::new(Vec::new()),
             last_expand_ms: AtomicU64::new(now_ms()),
@@ -173,9 +175,22 @@ impl LoadBalancer {
         self
     }
 
-    pub fn with_client(mut self, client: Arc<crate::core::hyper::MyHyperClient>) -> Self {
-        self.client = Some(client);
+    pub fn with_client(self, client: Arc<crate::core::hyper::MyHyperClient>) -> Self {
+        *self.client.write() = Some(client);
         self
+    }
+
+    pub fn with_server_name(self, server_name: String) -> Self {
+        *self.server_name.write() = server_name;
+        self
+    }
+
+    pub fn rebuild_client(&self) {
+        let server_name = self.server_name.read().clone();
+        if let Some(new_client) = crate::core::hyper::build_hyper_client(self.timeout_ms, server_name) {
+            *self.client.write() = Some(Arc::new(new_client));
+            push_log("INFO", "[重建] HTTP 客户端已重建");
+        }
     }
 
     pub fn with_max_sticky_slots(mut self, max_sticky_slots: usize) -> Self {
@@ -584,24 +599,6 @@ impl LoadBalancer {
         self.cancel_token.cancel();
     }
 
-    pub fn reset_pools(&self) {
-        let mut inner = self.inner.write();
-        let primary_count = inner.primary.len();
-        let backup_count = inner.backup.len();
-        inner.primary.clear();
-        inner.backup.clear();
-        drop(inner);
-        
-        self.ip_set.write().clear();
-        self.sticky_slots.write().clear();
-        
-        if primary_count > 0 || backup_count > 0 {
-            push_log("INFO", &format!("[重置] 清空后端池: 主队列 {} 个, 备选 {} 个", primary_count, backup_count));
-        }
-        
-        self.notify_resume();
-    }
-
     pub fn get_next_health_check_secs(&self) -> u64 {
         let next_ms = self.next_health_check_ms.load(Ordering::Relaxed);
         let current_ms = now_ms();
@@ -622,8 +619,7 @@ impl LoadBalancer {
     }
 
     pub fn start_health_check(self: Arc<Self>) {
-        let Some(client) = &self.client else { return };
-        let client = client.clone();
+        let Some(client) = self.client.read().clone() else { return };
 
         self.clone().start_sticky_maintainer();
 
@@ -659,8 +655,7 @@ impl LoadBalancer {
             primary_interval.tick().await;
 
             let mut last_tick = Instant::now();
-            const TIME_JUMP_THRESHOLD: Duration = Duration::from_secs(180);
-            const NETWORK_RECOVERY_WAIT: Duration = Duration::from_secs(5);
+            const TIME_JUMP_THRESHOLD: Duration = Duration::from_secs(60);
 
             loop {
                 let is_primary = tokio::select! {
@@ -674,9 +669,8 @@ impl LoadBalancer {
 
                 let now = Instant::now();
                 if now.duration_since(last_tick) > TIME_JUMP_THRESHOLD {
-                    push_log("INFO", "[健康检查] 检测到时间跳跃，可能刚从休眠唤醒，重置后端池");
-                    lb.reset_pools();
-                    tokio::time::sleep(NETWORK_RECOVERY_WAIT).await;
+                    push_log("INFO", "[健康检查] 检测到时间跳跃，重建 HTTP 客户端");
+                    lb.rebuild_client();
                 }
                 last_tick = now;
 

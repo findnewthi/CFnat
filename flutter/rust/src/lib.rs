@@ -4,8 +4,19 @@ use std::sync::OnceLock;
 use std::sync::Arc;
 use cfnat::core::ServiceState;
 use cfnat::core::config::get_global_config;
+use tokio::runtime::Runtime;
 
 static SERVICE: OnceLock<Arc<ServiceState>> = OnceLock::new();
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+fn get_runtime() -> &'static Runtime {
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
 
 fn get_service() -> Arc<ServiceState> {
     SERVICE.get_or_init(|| Arc::new(ServiceState::new())).clone()
@@ -57,8 +68,7 @@ pub struct LogItem {
 }
 
 #[frb]
-#[tokio::main(flavor = "current_thread")]
-pub async fn start_service(
+pub fn start_service(
     ip_file: Option<String>,
     ip_content: Option<Vec<String>>,
     http: Option<String>,
@@ -71,6 +81,9 @@ pub async fn start_service(
     max_sticky_slots: Option<i32>,
     listen_addr: Option<String>,
 ) -> bool {
+    let runtime = get_runtime();
+    let _guard = runtime.enter();
+    
     let service = get_service();
     let mut config = service.get_config();
     

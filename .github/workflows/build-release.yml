@@ -33,7 +33,12 @@ on:
         default: true
 
 env:
+  # 应用名称，用于生成安装包文件名
   APP_NAME: CFnat
+  # Rust 库名称，对应 flutter/rust/Cargo.toml 中的 package.name
+  RUST_LIB_NAME: cfnat_flutter
+  # Android 签名密钥别名默认值，当 ANDROID_KEY_ALIAS Secret 未设置时使用
+  ANDROID_KEY_ALIAS_DEFAULT: cfnat
 
 jobs:
   validate_version:
@@ -126,7 +131,7 @@ jobs:
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=../keystore.jks
           PROPS
-          cat > app/signing.gradle.kts << 'GRADLE'
+          cat > app/signing.gradle.kts << GRADLE
           val keyProps = java.util.Properties()
           val keyPropsFile = file("../key.properties")
           if (keyPropsFile.exists()) {
@@ -135,7 +140,7 @@ jobs:
           android {
               signingConfigs {
                   create("release") {
-                      keyAlias = keyProps.getProperty("keyAlias", "cfnat")
+                      keyAlias = keyProps.getProperty("keyAlias", "${{ env.ANDROID_KEY_ALIAS_DEFAULT }}")
                       keyPassword = keyProps.getProperty("keyPassword", "")
                       storeFile = file(keyProps.getProperty("storeFile", "../keystore.jks"))
                       storePassword = keyProps.getProperty("storePassword", "")
@@ -243,7 +248,7 @@ jobs:
           flutter build windows --release --build-name="$VERSION_NUM"
 
       - name: 复制 DLL 到输出目录
-        run: cp flutter/rust/target/x86_64-pc-windows-msvc/release/cfnat_flutter.dll flutter/build/windows/x64/runner/Release/
+        run: cp flutter/rust/target/x86_64-pc-windows-msvc/release/${{ env.RUST_LIB_NAME }}.dll flutter/build/windows/x64/runner/Release/
 
       - name: 打包 Portable 版本
         run: Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
@@ -420,7 +425,7 @@ jobs:
           if [ "${{ matrix.arch }}" == "x64" ]; then
             BUNDLE_DIR="flutter/build/linux/${{ matrix.flutter_bundle_dir }}"
             mkdir -p "$BUNDLE_DIR/lib"
-            cp flutter/rust/target/${{ matrix.rust_target }}/release/libcfnat_flutter.so "$BUNDLE_DIR/lib/"
+            cp flutter/rust/target/${{ matrix.rust_target }}/release/lib${{ env.RUST_LIB_NAME }}.so "$BUNDLE_DIR/lib/"
           else
             BUNDLE_DIR=$(find flutter/build/linux -type d -name "bundle" | head -1)
             if [ -z "$BUNDLE_DIR" ]; then
@@ -429,7 +434,7 @@ jobs:
             fi
             echo "使用 bundle 目录: $BUNDLE_DIR"
             mkdir -p "$BUNDLE_DIR/lib"
-            cp flutter/rust/target/release/libcfnat_flutter.so "$BUNDLE_DIR/lib/"
+            cp flutter/rust/target/release/lib${{ env.RUST_LIB_NAME }}.so "$BUNDLE_DIR/lib/"
           fi
 
       - name: 打包发布文件
@@ -632,7 +637,7 @@ jobs:
             exit 1
           fi
           echo "找到 app: $APP_PATH"
-          cp flutter/rust/target/${{ matrix.rust_target }}/release/libcfnat_flutter.dylib "$APP_PATH/Contents/MacOS/"
+          cp flutter/rust/target/${{ matrix.rust_target }}/release/lib${{ env.RUST_LIB_NAME }}.dylib "$APP_PATH/Contents/MacOS/"
 
       - name: 打包 DMG
         if: steps.check_enabled.outputs.enabled == 'true'

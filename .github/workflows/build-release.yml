@@ -121,17 +121,6 @@ jobs:
           cd flutter
           flutter config --enable-android
 
-      - name: 设置 Android 签名
-        run: |
-          cd flutter/android
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > keystore.jks
-          cat > gradle.properties << EOF
-          android.injected.signing.store.file=keystore.jks
-          android.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          android.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }}
-          android.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
-          EOF
-
       - name: 生成桥接代码
         run: |
           cd flutter
@@ -146,9 +135,14 @@ jobs:
       - name: 构建 Android APK
         run: |
           cd flutter
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 --decode > android/keystore.jks
           VERSION="${{ needs.validate_version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
-          flutter build apk --release --split-per-abi --build-name="$VERSION_NUM"
+          flutter build apk --release --split-per-abi --build-name="$VERSION_NUM" \
+            -Pandroid.injected.signing.store.file=$(pwd)/android/keystore.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: 重命名产物
         run: |

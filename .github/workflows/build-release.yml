@@ -51,8 +51,8 @@ jobs:
       - name: 验证版本号
         id: validate
         run: |
-          git fetch --tags
-          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          git fetch --tags --force
+          latest=$(git tag --sort=-version:refname 2>/dev/null | head -n 1 || echo "0.0.0")
           latest=${latest#v}
           input_version="${{ github.event.inputs.version }}"
           input_version=${input_version#v}

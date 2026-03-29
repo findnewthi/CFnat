@@ -15,6 +15,9 @@ class RustService extends AppService {
   bool get isLoading => false;
   @override
   bool get isRunning => false;
+
+  Future<void> initialize() async {}
+
   @override
   Future<void> fetchStatus() async {}
   @override

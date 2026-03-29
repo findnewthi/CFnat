@@ -128,7 +128,7 @@ pub fn get_status() -> StatusInfo {
     if let Some(lb) = service.get_loadbalancer() {
         let primary_backends = lb.get_primary_backends();
         let backup_backends = lb.get_backup_backends();
-        let sticky_ips = lb.get_sticky_addrs();
+        let sticky_ips = lb.get_sticky_ips();
         
         StatusInfo {
             running,
@@ -140,14 +140,14 @@ pub fn get_status() -> StatusInfo {
             backup_count: backup_backends.len() as i32,
             backup_target: lb.get_backup_target() as i32,
             primary_ips: primary_backends.iter().map(|b| IpInfo {
-                ip: b.addr.to_string(),
+                ip: b.addr.ip().to_string(),
                 delay: b.get_avg_delay() as f64,
                 loss: b.get_loss_rate() as f64,
                 samples: b.get_sample_count() as i32,
                 colo: b.get_colo(),
             }).collect(),
             backup_ips: backup_backends.iter().map(|b| IpInfo {
-                ip: b.addr.to_string(),
+                ip: b.addr.ip().to_string(),
                 delay: b.get_avg_delay() as f64,
                 loss: b.get_loss_rate() as f64,
                 samples: b.get_sample_count() as i32,

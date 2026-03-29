@@ -116,6 +116,40 @@ jobs:
           cd flutter
           flutter config --enable-android
 
+      - name: 设置 Android 签名
+        run: |
+          cd flutter/android
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > keystore.jks
+          cat > key.properties << 'PROPS'
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=../keystore.jks
+          PROPS
+          cat > app/signing.gradle.kts << 'GRADLE'
+          val keyProps = java.util.Properties()
+          val keyPropsFile = file("../key.properties")
+          if (keyPropsFile.exists()) {
+              keyProps.load(keyPropsFile.inputStream())
+          }
+          android {
+              signingConfigs {
+                  create("release") {
+                      keyAlias = keyProps.getProperty("keyAlias", "cfnat")
+                      keyPassword = keyProps.getProperty("keyPassword", "")
+                      storeFile = file(keyProps.getProperty("storeFile", "../keystore.jks"))
+                      storePassword = keyProps.getProperty("storePassword", "")
+                  }
+              }
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+          }
+          GRADLE
+          echo 'apply(from = "signing.gradle.kts")' >> app/build.gradle.kts
+
       - name: 生成桥接代码
         run: |
           cd flutter

@@ -11,8 +11,12 @@ on:
         description: '构建 Android APK'
         type: boolean
         default: true
-      build_windows:
-        description: '构建 Windows'
+      build_windows_x64:
+        description: '构建 Windows x64'
+        type: boolean
+        default: true
+      build_windows_arm64:
+        description: '构建 Windows ARM64'
         type: boolean
         default: true
       build_linux_x64:
@@ -159,59 +163,120 @@ jobs:
           path: flutter/build/app/outputs/flutter-apk/*.apk
 
   build_windows:
-    name: 构建 Windows
+    name: 构建 Windows ${{ matrix.arch }}
     needs: [validate_version]
-    if: ${{ inputs.build_windows }}
-    runs-on: windows-latest
+    if: ${{ inputs.build_windows_x64 || inputs.build_windows_arm64 }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            flutter_arch: x64
+          - arch: arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            flutter_arch: arm64
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 Flutter
+      - name: 检查是否需要构建
+        id: check_enabled
+        shell: pwsh
+        run: |
+          if ("${{ matrix.arch }}" -eq "x64" -and "${{ inputs.build_windows_x64 }}" -ne "true") {
+            echo "enabled=false" >> $env:GITHUB_OUTPUT
+            echo "跳过 Windows x64 构建"
+          } elseif ("${{ matrix.arch }}" -eq "arm64" -and "${{ inputs.build_windows_arm64 }}" -ne "true") {
+            echo "enabled=false" >> $env:GITHUB_OUTPUT
+            echo "跳过 Windows arm64 构建"
+          } else {
+            echo "enabled=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: 安装 Rust (ARM64 runner)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'arm64'
+        run: |
+          Invoke-WebRequest -Uri "https://win.rustup.rs/aarch64" -OutFile rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain stable
+          $cargoPath = "$env:USERPROFILE\.cargo\bin"
+          Add-Content $env:GITHUB_PATH $cargoPath
+
+      - name: 安装 Rust (x64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'x64'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: 安装 Flutter (x64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'x64'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.x'
           channel: 'stable'
 
-      - name: 安装 Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: 安装 Flutter (ARM64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'arm64'
+        uses: subosito/flutter-action@v2
         with:
-          targets: x86_64-pc-windows-msvc
+          channel: 'master'
+          cache: true
 
       - name: 安装 Zig
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'x64'
         uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
 
       - name: 安装 LLVM
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: choco install llvm -y
 
-      - name: 安装 cargo-zigbuild 和 flutter_rust_bridge
+      - name: 安装 cargo-zigbuild 和 flutter_rust_bridge (x64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'x64'
         run: |
           cargo install --locked cargo-zigbuild
           cargo install flutter_rust_bridge_codegen
 
+      - name: 安装 flutter_rust_bridge (ARM64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'arm64'
+        run: cargo install flutter_rust_bridge_codegen
+
       - name: 清理旧生成文件
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: |
           Remove-Item -Path "flutter\rust\src\frb_generated*.rs" -Force -ErrorAction SilentlyContinue
           cd flutter; flutter clean
 
       - name: 配置 Flutter 平台
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: |
           cd flutter
           flutter config --enable-windows-desktop
 
       - name: 生成桥接代码
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: |
           cd flutter
           flutter pub get
           flutter_rust_bridge_codegen generate
 
-      - name: 编译 Rust 库 (Windows)
+      - name: 编译 Rust 库 (x64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'x64'
         run: |
           cd flutter/rust
-          cargo zigbuild --release --target x86_64-pc-windows-msvc || cargo build --release --target x86_64-pc-windows-msvc
+          cargo zigbuild --release --target ${{ matrix.rust_target }} || cargo build --release --target ${{ matrix.rust_target }}
+
+      - name: 编译 Rust 库 (ARM64)
+        if: steps.check_enabled.outputs.enabled == 'true' && matrix.arch == 'arm64'
+        run: |
+          cd flutter/rust
+          cargo build --release --target ${{ matrix.rust_target }}
 
       - name: 构建 Windows
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: |
           cd flutter
           $VERSION = "${{ needs.validate_version.outputs.version }}"
@@ -219,12 +284,15 @@ jobs:
           flutter build windows --release --build-name="$VERSION_NUM"
 
       - name: 复制 DLL 到输出目录
-        run: cp flutter/rust/target/x86_64-pc-windows-msvc/release/${{ env.RUST_LIB_NAME }}.dll flutter/build/windows/x64/runner/Release/
+        if: steps.check_enabled.outputs.enabled == 'true'
+        run: cp flutter/rust/target/${{ matrix.rust_target }}/release/${{ env.RUST_LIB_NAME }}.dll flutter/build/windows/${{ matrix.flutter_arch }}/runner/Release/
 
       - name: 打包 Portable 版本
-        run: Compress-Archive -Path "flutter/build/windows/x64/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-x64.zip"
+        if: steps.check_enabled.outputs.enabled == 'true'
+        run: Compress-Archive -Path "flutter/build/windows/${{ matrix.flutter_arch }}/runner/Release/*" -DestinationPath "${{ env.APP_NAME }}-windows-${{ matrix.arch }}.zip"
 
       - name: 创建 Setup 安装脚本
+        if: steps.check_enabled.outputs.enabled == 'true'
         run: |
           $version = "${{ needs.validate_version.outputs.version }}"
           $versionStr = $version -replace 'v', ''
@@ -234,11 +302,11 @@ jobs:
           AppVersion=$versionStr
           DefaultDirName={autopf}\${{ env.APP_NAME }}
           OutputDir=.
-          OutputBaseFilename=${{ env.APP_NAME }}-windows-x64-setup
+          OutputBaseFilename=${{ env.APP_NAME }}-windows-${{ matrix.arch }}-setup
           Compression=lzma2
 
           [Files]
-          Source: "flutter\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+          Source: "flutter\build\windows\${{ matrix.flutter_arch }}\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
           [Icons]
           Name: "{group}\${{ env.APP_NAME }}"; Filename: "{app}\${{ env.APP_NAME }}.exe"
@@ -250,14 +318,16 @@ jobs:
           $content | Out-File -FilePath setup.iss -Encoding UTF8 -NoNewline
 
       - name: 编译 Inno Setup 安装包
+        if: steps.check_enabled.outputs.enabled == 'true'
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
         with:
           path: setup.iss
 
       - name: 上传 Windows 产物
+        if: steps.check_enabled.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: windows
+          name: windows-${{ matrix.arch }}
           path: |
             *.zip
             *.exe
@@ -637,8 +707,8 @@ jobs:
 
   create_release:
     name: 创建 Release
-    needs: [build_android, build_windows, build_linux, build_macos, validate_version]
-    if: ${{ success() }}
+    needs: [validate_version]
+    if: always() && needs.validate_version.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

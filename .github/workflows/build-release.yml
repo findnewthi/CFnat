@@ -707,8 +707,8 @@ jobs:
 
   create_release:
     name: 创建 Release
-    needs: [validate_version]
-    if: always() && needs.validate_version.result == 'success'
+    needs: [validate_version, build_android, build_windows, build_linux, build_macos]
+    if: always() && needs.validate_version.result == 'success' && (needs.build_android.result == 'success' || needs.build_android.result == 'skipped') && (needs.build_windows.result == 'success' || needs.build_windows.result == 'skipped') && (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped') && (needs.build_macos.result == 'success' || needs.build_macos.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

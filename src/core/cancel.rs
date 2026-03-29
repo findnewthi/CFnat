@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct CancellationToken {
@@ -11,7 +9,7 @@ pub struct CancellationToken {
 
 struct Inner {
     cancelled: AtomicBool,
-    notifier: tokio::sync::Notify,
+    notifier: Notify,
 }
 
 impl CancellationToken {
@@ -19,7 +17,7 @@ impl CancellationToken {
         Self {
             inner: Arc::new(Inner {
                 cancelled: AtomicBool::new(false),
-                notifier: tokio::sync::Notify::new(),
+                notifier: Notify::new(),
             }),
         }
     }
@@ -34,39 +32,12 @@ impl CancellationToken {
         self.inner.cancelled.load(Ordering::Acquire)
     }
 
-    pub fn cancelled(&self) -> CancelledFuture {
-        CancelledFuture {
-            inner: self.inner.clone(),
-            notified: false,
-        }
-    }
-}
-
-pub struct CancelledFuture {
-    inner: Arc<Inner>,
-    notified: bool,
-}
-
-impl Future for CancelledFuture {
-    type Output = ();
-
-    
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    pub async fn cancelled(&self) {
+        let wait = self.inner.notifier.notified();
         if self.inner.cancelled.load(Ordering::Acquire) {
-            return Poll::Ready(());
+            return;
         }
-        
-        if !self.notified {
-            let waker = cx.waker().clone();
-            let inner = self.inner.clone();
-            tokio::spawn(async move {
-                inner.notifier.notified().await;
-                waker.wake();
-            });
-            self.notified = true;
-        }
-        
-        Poll::Pending
+        wait.await;
     }
 }
 

@@ -203,11 +203,6 @@ fn get_mime_type(path: &str) -> &'static str {
 
 #[cfg(feature = "web")]
 pub async fn serve_embedded_files(uri: Uri) -> Response {
-    use axum::{
-        http::{header, StatusCode},
-        response::IntoResponse,
-    };
-    
     let path = uri.path().trim_start_matches('/');
     
     if path.is_empty() || path == "index.html" {

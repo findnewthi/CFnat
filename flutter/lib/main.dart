@@ -47,7 +47,7 @@ class CFnatApp extends StatelessWidget {
           cardTheme: CardThemeData(
             color: const Color(0xFF161B22),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(12),
               side: const BorderSide(color: Color(0xFF2A2F3A)),
             ),
           ),

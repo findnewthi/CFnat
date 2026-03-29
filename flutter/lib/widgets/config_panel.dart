@@ -492,7 +492,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
                       children: [
                         const SizedBox(height: 8),
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(8),
                           child: TextField(
                             controller: _manualInputController,
                             readOnly: !enabled,
@@ -753,7 +753,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
         const SizedBox(width: 8),
         Expanded(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(8),
             child: LinearProgressIndicator(
               value: progress,
               backgroundColor: Colors.grey[800],
@@ -855,7 +855,7 @@ class _LogPanelState extends State<_LogPanel> {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       decoration: BoxDecoration(
         color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -881,7 +881,7 @@ class _LogPanelState extends State<_LogPanel> {
                     await widget.service.clearLogs();
                     await _fetchLogs();
                   },
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(8),
                   child: Padding(
                     padding: const EdgeInsets.all(4),
                     child: Icon(Icons.delete_outline, size: 16, color: Colors.grey[500]),
@@ -950,7 +950,7 @@ class _LogPanelState extends State<_LogPanel> {
             padding: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
               color: levelColor.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(2),
+              borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
               log.level.padRight(5),

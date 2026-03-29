@@ -125,28 +125,12 @@ jobs:
         run: |
           cd flutter/android
           echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > keystore.jks
-          cat > key.properties << 'PROPS'
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          storeFile=../keystore.jks
-          PROPS
-          awk '
-          /buildTypes \{/ {
-              print "    signingConfigs {"
-              print "        create(\"release\") {"
-              print "            val keyProps = java.util.Properties()"
-              print "            file(\"../key.properties\").takeIf { it.exists() }?.inputStream()?.use { keyProps.load(it) }"
-              print "            keyAlias = keyProps.getProperty(\"keyAlias\", \"${{ env.ANDROID_KEY_ALIAS_DEFAULT }}\")"
-              print "            keyPassword = keyProps.getProperty(\"keyPassword\", \"\")"
-              print "            storeFile = file(keyProps.getProperty(\"storeFile\", \"../keystore.jks\"))"
-              print "            storePassword = keyProps.getProperty(\"storePassword\", \"\")"
-              print "        }"
-              print "    }"
-          }
-          { print }
-          ' app/build.gradle.kts > app/build.gradle.kts.tmp && mv app/build.gradle.kts.tmp app/build.gradle.kts
-          sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("release")/' app/build.gradle.kts
+          cat > gradle.properties << EOF
+          android.injected.signing.store.file=keystore.jks
+          android.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          android.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }}
+          android.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
 
       - name: 生成桥接代码
         run: |

@@ -58,6 +58,7 @@ pub struct ConfigInfo {
     pub http_port: i32,
     pub max_sticky_slots: i32,
     pub listen_addr: String,
+    pub colo: Option<Vec<String>>,
 }
 
 #[frb]
@@ -80,6 +81,7 @@ pub fn start_service(
     http_port: Option<i32>,
     max_sticky_slots: Option<i32>,
     listen_addr: Option<String>,
+    colo: Option<Vec<String>>,
 ) -> bool {
     let runtime = get_runtime();
     let _guard = runtime.enter();
@@ -100,6 +102,7 @@ pub fn start_service(
             config.listen_addr = addr;
         }
     }
+    if let Some(v) = colo { config.colo = Some(v); }
     
     service.update_config(config);
     
@@ -125,7 +128,7 @@ pub fn get_status() -> StatusInfo {
     if let Some(lb) = service.get_loadbalancer() {
         let primary_backends = lb.get_primary_backends();
         let backup_backends = lb.get_backup_backends();
-        let sticky_ips = lb.get_sticky_ips();
+        let sticky_ips = lb.get_sticky_addrs();
         
         StatusInfo {
             running,
@@ -184,6 +187,7 @@ pub fn get_config() -> ConfigInfo {
         http_port: config.http_port as i32,
         max_sticky_slots: config.max_sticky_slots as i32,
         listen_addr: config.listen_addr.to_string(),
+        colo: config.colo,
     }
 }
 

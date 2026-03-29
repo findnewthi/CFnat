@@ -595,6 +595,14 @@ impl LoadBalancer {
             .collect()
     }
 
+    pub fn get_sticky_addrs(&self) -> Vec<std::net::SocketAddr> {
+        self.sticky_slots
+            .read()
+            .iter()
+            .map(|s| s.backend.addr)
+            .collect()
+    }
+
     pub fn stop(&self) {
         self.cancel_token.cancel();
     }

@@ -107,9 +107,9 @@ impl StatusInfo {
             .map(IpInfo::from_backend)
             .collect();
         
-        let sticky_ips: Vec<String> = lb.get_sticky_ips()
+        let sticky_ips: Vec<String> = lb.get_sticky_addrs()
             .into_iter()
-            .map(|ip| ip.to_string())
+            .map(|addr| addr.to_string())
             .collect();
         
         Self {
@@ -150,7 +150,7 @@ pub struct IpInfo {
 impl IpInfo {
     pub fn from_backend(backend: &std::sync::Arc<crate::core::backend::Backend>) -> Self {
         Self {
-            ip: backend.addr.ip().to_string(),
+            ip: backend.addr.to_string(),
             colo: backend.get_colo(),
             delay: backend.get_avg_delay() as f64,
             loss: backend.get_loss_rate() as f64,

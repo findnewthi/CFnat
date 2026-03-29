@@ -103,6 +103,7 @@ class RustService extends AppService {
         http: result.http,
         ipFile: result.ipFile,
         maxStickySlots: result.maxStickySlots,
+        colo: result.colo,
       );
       notifyListeners();
     } catch (e) {
@@ -138,6 +139,7 @@ class RustService extends AppService {
         httpPort: httpPort,
         maxStickySlots: maxStickySlots,
         listenAddr: listenAddr,
+        colo: colo,
       );
       if (success) {
         await fetchConfig();

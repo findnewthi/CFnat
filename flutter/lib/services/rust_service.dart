@@ -128,6 +128,7 @@ class RustService extends AppService {
     try {
       final success = await rust.startService(
         ipFile: ipFile,
+        ipContent: ipContent,
         http: http,
         delayLimit: delayLimit != null ? BigInt.from(delayLimit) : null,
         tlr: tlr,

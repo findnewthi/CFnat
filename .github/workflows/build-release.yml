@@ -131,29 +131,29 @@ jobs:
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=../keystore.jks
           PROPS
-          cat > app/signing.gradle.kts << GRADLE
-          val keyProps = java.util.Properties()
-          val keyPropsFile = file("../key.properties")
+          cat > app/signing.gradle << 'GRADLE'
+          def keyProps = new Properties()
+          def keyPropsFile = file("../key.properties")
           if (keyPropsFile.exists()) {
-              keyProps.load(keyPropsFile.inputStream())
+              keyProps.load(keyPropsFile.newInputStream())
           }
           android {
               signingConfigs {
-                  create("release") {
-                      keyAlias = keyProps.getProperty("keyAlias", "${{ env.ANDROID_KEY_ALIAS_DEFAULT }}")
-                      keyPassword = keyProps.getProperty("keyPassword", "")
-                      storeFile = file(keyProps.getProperty("storeFile", "../keystore.jks"))
-                      storePassword = keyProps.getProperty("storePassword", "")
+                  release {
+                      keyAlias keyProps.getProperty("keyAlias", "${{ env.ANDROID_KEY_ALIAS_DEFAULT }}")
+                      keyPassword keyProps.getProperty("keyPassword", "")
+                      storeFile file(keyProps.getProperty("storeFile", "../keystore.jks"))
+                      storePassword keyProps.getProperty("storePassword", "")
                   }
               }
               buildTypes {
-                  getByName("release") {
-                      signingConfig = signingConfigs.getByName("release")
+                  release {
+                      signingConfig signingConfigs.release
                   }
               }
           }
           GRADLE
-          echo 'apply(from = "signing.gradle.kts")' >> app/build.gradle.kts
+          echo 'apply from: "signing.gradle"' >> app/build.gradle.kts
 
       - name: 生成桥接代码
         run: |

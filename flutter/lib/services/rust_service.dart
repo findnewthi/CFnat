@@ -27,6 +27,7 @@ class RustService extends AppService {
 
   Future<void> initialize() async {
     try {
+      await fetchConfig();
       _initialized = true;
       _startPolling();
       notifyListeners();

@@ -57,7 +57,8 @@ pub struct LogItem {
 }
 
 #[frb]
-pub fn start_service(
+#[tokio::main(flavor = "current_thread")]
+pub async fn start_service(
     ip_file: Option<String>,
     http: Option<String>,
     delay_limit: Option<u64>,

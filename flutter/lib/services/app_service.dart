@@ -11,6 +11,7 @@ abstract class AppService extends ChangeNotifier {
   Future<void> fetchConfig();
   Future<bool> startService({
     String? ipFile,
+    List<String>? ipContent,
     String? http,
     int? delayLimit,
     double? tlr,
@@ -179,4 +180,46 @@ class ConfigData {
       maxStickySlots: json['max_sticky_slots'] as int,
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! ConfigData) return false;
+    return addr == other.addr &&
+        delayLimit == other.delayLimit &&
+        tlr == other.tlr &&
+        ips == other.ips &&
+        threads == other.threads &&
+        tlsPort == other.tlsPort &&
+        httpPort == other.httpPort &&
+        http == other.http &&
+        ipFile == other.ipFile &&
+        maxStickySlots == other.maxStickySlots &&
+        _listEquals(colo, other.colo);
+  }
+
+  static bool _listEquals(List<String>? a, List<String>? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        addr,
+        delayLimit,
+        tlr,
+        ips,
+        threads,
+        tlsPort,
+        httpPort,
+        http,
+        ipFile,
+        maxStickySlots,
+        colo,
+      );
 }

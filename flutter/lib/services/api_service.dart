@@ -158,6 +158,7 @@ class ApiService extends AppService {
   @override
   Future<bool> startService({
     String? ipFile,
+    List<String>? ipContent,
     String? http,
     int? delayLimit,
     double? tlr,
@@ -172,6 +173,7 @@ class ApiService extends AppService {
     try {
       final body = <String, dynamic>{
         if (ipFile != null) 'ip_file': ipFile,
+        if (ipContent != null) 'ip_content': ipContent,
         if (http != null) 'http': http,
         if (delayLimit != null) 'delay_limit': delayLimit,
         if (tlr != null) 'tlr': tlr,

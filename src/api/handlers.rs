@@ -43,9 +43,6 @@ pub async fn start_service(
 ) -> Json<ApiResponse> {
     let mut config = state.service.get_config();
     
-    if let Some(ip_file) = req.ip_file {
-        config.ip_file = ip_file;
-    }
     if let Some(http) = req.http {
         config.http = http;
     }
@@ -79,7 +76,12 @@ pub async fn start_service(
     
     state.service.update_config(config);
     
-    match state.service.start() {
+    let result = state.service.start_with_ips(
+        req.ip_file.as_deref(),
+        req.ip_content.as_deref(),
+    );
+    
+    match result {
         Ok(_) => Json(ApiResponse {
             success: true,
             message: "服务已启动".to_string(),

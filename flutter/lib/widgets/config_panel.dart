@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../services/app_service.dart';
 
 class ConfigPanel extends StatefulWidget {
@@ -15,6 +17,7 @@ class ConfigPanel extends StatefulWidget {
 
 class _ConfigPanelState extends State<ConfigPanel> {
   final _speedTestFileController = TextEditingController();
+  final _manualInputController = TextEditingController();
   final _dataCenterController = TextEditingController();
   final _delayLimitController = TextEditingController();
   final _tlrController = TextEditingController();
@@ -26,10 +29,15 @@ class _ConfigPanelState extends State<ConfigPanel> {
   final _httpPortController = TextEditingController();
   final _maxStickySlotsController = TextEditingController();
   
-  bool _initialized = false;
   bool _isRunning = false;
   bool _connected = false;
   bool _actionInProgress = false;
+  bool _showManualInput = false;
+  
+  List<String>? _ipContent;
+  List<String> _manualIps = [];
+  int get _manualIpCount => _manualIps.length;
+  ConfigData? _lastConfig;
 
   @override
   void initState() {
@@ -40,6 +48,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
   @override
   void dispose() {
     _speedTestFileController.dispose();
+    _manualInputController.dispose();
     _dataCenterController.dispose();
     _delayLimitController.dispose();
     _tlrController.dispose();
@@ -55,7 +64,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
 
   void _initFromConfig() {
     final config = widget.service.config;
-    if (config != null && !_initialized) {
+    if (config != null && config != _lastConfig) {
       _speedTestFileController.text = config.ipFile;
       _dataCenterController.text = config.colo?.join(',') ?? '';
       _delayLimitController.text = config.delayLimit.toString();
@@ -67,7 +76,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
       _tlsPortController.text = config.tlsPort.toString();
       _httpPortController.text = config.httpPort.toString();
       _maxStickySlotsController.text = config.maxStickySlots.toString();
-      _initialized = true;
+      _lastConfig = config;
     }
   }
 
@@ -80,7 +89,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
         _isRunning = isRunning;
         _connected = connected;
         
-        if (config != null && !_initialized) {
+        if (config != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _initFromConfig();
           });
@@ -109,7 +118,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           padding: const EdgeInsets.all(16),
           sliver: SliverList(
             delegate: SliverChildListDelegate([
-              _buildTextField(
+              _buildFilePickerField(
                 controller: _speedTestFileController,
                 label: '测速文件',
                 enabled: !isRunning,
@@ -238,7 +247,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           padding: EdgeInsets.all(padding),
           sliver: SliverList(
             delegate: SliverChildListDelegate([
-              _buildTextField(
+              _buildFilePickerField(
                 controller: _speedTestFileController,
                 label: '测速文件',
                 enabled: !isRunning,
@@ -401,6 +410,156 @@ class _ConfigPanelState extends State<ConfigPanel> {
     );
   }
 
+  Widget _buildFilePickerField({
+    required TextEditingController controller,
+    required String label,
+    bool enabled = true,
+    double? fontSize,
+  }) {
+    final size = fontSize ?? 14.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                enabled: enabled,
+                style: fontSize != null ? TextStyle(fontSize: size) : null,
+                onChanged: (_) => setState(() => _ipContent = null),
+                decoration: InputDecoration(
+                  labelText: label,
+                  floatingLabelBehavior: FloatingLabelBehavior.always,
+                  border: const OutlineInputBorder(),
+                  contentPadding: fontSize != null 
+                      ? EdgeInsets.symmetric(horizontal: 10, vertical: size * 0.6)
+                      : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  labelStyle: fontSize != null ? TextStyle(fontSize: size - 1) : null,
+                  suffixText: _ipContent != null ? '已从文件加载' : null,
+                  suffixStyle: TextStyle(
+                    color: Colors.green[400],
+                    fontSize: (size - 2).clamp(10.0, 12.0),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: enabled ? () => _pickFile(controller) : null,
+              icon: const Icon(Icons.folder_open),
+              tooltip: '选择文件',
+              style: IconButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+              ),
+            ),
+          ],
+        ),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () => setState(() => _showManualInput = !_showManualInput),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.edit,
+                    size: 16,
+                    color: _showManualInput 
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey[400],
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$_manualIpCount 行',
+                    style: TextStyle(
+                      fontSize: (size - 2).clamp(10.0, 12.0),
+                      color: Colors.grey[400],
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _showManualInput ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    size: 18,
+                    color: Colors.grey[400],
+                  ),
+                ],
+              ),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              child: _showManualInput
+                  ? Column(
+                      children: [
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: TextField(
+                            controller: _manualInputController,
+                            readOnly: !enabled,
+                            maxLines: 4,
+                            style: fontSize != null ? TextStyle(fontSize: size) : null,
+                            onChanged: (_) => _parseManualInput(),
+                            scrollPadding: EdgeInsets.zero,
+                            decoration: InputDecoration(
+                              border: const OutlineInputBorder(),
+                              contentPadding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                              filled: !enabled,
+                              fillColor: enabled ? null : Theme.of(context).colorScheme.surfaceContainerHighest,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        );
+  }
+
+  void _parseManualInput() {
+    final text = _manualInputController.text;
+    setState(() {
+      _manualIps = text.split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty)
+          .toList();
+    });
+  }
+
+  Future<void> _pickFile(TextEditingController controller) async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt'],
+        dialogTitle: '选择测速文件',
+        withData: true,
+      );
+      
+      if (result != null) {
+        final file = result.files.single;
+        final path = file.path;
+        
+        if (path != null && !path.startsWith('blob:')) {
+          setState(() {
+            _ipContent = null;
+          });
+          controller.text = path;
+        } else if (file.bytes != null) {
+          final content = String.fromCharCodes(file.bytes!);
+          setState(() {
+            _ipContent = content.split('\n')
+                .map((line) => line.trim())
+                .where((line) => line.isNotEmpty)
+                .toList();
+          });
+          controller.text = file.name;
+        }
+      }
+    } catch (e) {
+      debugPrint('文件选择失败: $e');
+    }
+  }
+
   Widget _buildActionButtons() {
     if (!_connected) {
       return Center(
@@ -443,10 +602,23 @@ class _ConfigPanelState extends State<ConfigPanel> {
         onPressed: _actionInProgress
             ? null
             : () async {
+                String? ipFileToSend;
+                List<String>? ipContentToSend;
+                
+                if (_manualIps.isNotEmpty) {
+                  ipContentToSend = _manualIps;
+                }
+                
+                if (!kIsWeb && _speedTestFileController.text.isNotEmpty) {
+                  ipFileToSend = _speedTestFileController.text;
+                } else if (_ipContent != null) {
+                  ipContentToSend = [...ipContentToSend ?? [], ..._ipContent!];
+                }
+                
                 await _runAction(
                   () => widget.service.startService(
-                    ipFile: _speedTestFileController.text.isNotEmpty 
-                        ? _speedTestFileController.text : null,
+                    ipFile: ipFileToSend,
+                    ipContent: ipContentToSend,
                     http: _testAddressController.text.isNotEmpty 
                         ? _testAddressController.text : null,
                     delayLimit: int.tryParse(_delayLimitController.text),

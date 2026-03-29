@@ -11,6 +11,7 @@ dependencies:
   provider: any
   intl: any
   flutter_rust_bridge: any
+  file_picker: any
 
 dev_dependencies:
   flutter_test:

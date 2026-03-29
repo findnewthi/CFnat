@@ -162,6 +162,7 @@ impl IpInfo {
 #[derive(Deserialize)]
 pub struct StartRequest {
     pub ip_file: Option<String>,
+    pub ip_content: Option<Vec<String>>,
     pub http: Option<String>,
     pub delay_limit: Option<u64>,
     pub tlr: Option<f64>,

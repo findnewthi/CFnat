@@ -60,6 +60,7 @@ pub struct LogItem {
 #[tokio::main(flavor = "current_thread")]
 pub async fn start_service(
     ip_file: Option<String>,
+    ip_content: Option<Vec<String>>,
     http: Option<String>,
     delay_limit: Option<u64>,
     tlr: Option<f64>,
@@ -73,7 +74,6 @@ pub async fn start_service(
     let service = get_service();
     let mut config = service.get_config();
     
-    if let Some(v) = ip_file { config.ip_file = v; }
     if let Some(v) = http { config.http = v; }
     if let Some(v) = delay_limit { config.delay_limit = v; }
     if let Some(v) = tlr { config.tlr = v; }
@@ -89,7 +89,11 @@ pub async fn start_service(
     }
     
     service.update_config(config);
-    service.start().is_ok()
+    
+    service.start_with_ips(
+        ip_file.as_deref(),
+        ip_content.as_deref(),
+    ).is_ok()
 }
 
 #[frb]

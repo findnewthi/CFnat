@@ -101,6 +101,50 @@ impl ServiceState {
             return Err("未找到有效的 IP".to_string());
         }
 
+        self.start_with_pool(ip_pool)
+    }
+
+    pub fn start_with_ips(&self, ip_file: Option<&str>, ip_content: Option<&[String]>) -> Result<(), String> {
+        if self.is_running() {
+            return Err("服务已在运行".to_string());
+        }
+
+        let mut all_ips = Vec::new();
+        
+        if let Some(file) = ip_file {
+            if !file.is_empty() {
+                if let Ok(f) = std::fs::File::open(file) {
+                    use std::io::{BufRead, BufReader};
+                    for line in BufReader::new(f).lines().map_while(Result::ok) {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            all_ips.push(line.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        if let Some(content) = ip_content {
+            all_ips.extend(content.iter().cloned());
+        }
+        
+        if all_ips.is_empty() {
+            let config = self.get_config();
+            let ip_pool = Arc::new(IpPool::from_file(&config.ip_file));
+            if ip_pool.total_count() == 0 {
+                return Err("未找到有效的 IP".to_string());
+            }
+            return self.start_with_pool(ip_pool);
+        }
+
+        let ip_pool = Arc::new(IpPool::new(&all_ips));
+        self.start_with_pool(ip_pool)
+    }
+
+    fn start_with_pool(&self, ip_pool: Arc<IpPool>) -> Result<(), String> {
+        let config = self.get_config();
+
         let (_, host, _, _) = parse_url(&config.http)
             .ok_or("URL 解析失败")?;
 

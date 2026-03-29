@@ -113,6 +113,7 @@ class RustService extends AppService {
   @override
   Future<bool> startService({
     String? ipFile,
+    List<String>? ipContent,
     String? http,
     int? delayLimit,
     double? tlr,

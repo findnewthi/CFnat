@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../bridge_generated.dart/lib.dart' as rust;
 import 'app_service.dart';
 
+export '../bridge_generated.dart/frb_generated.dart' show RustLib;
+
 class RustService extends AppService {
   StatusData? _status;
   ConfigData? _config;

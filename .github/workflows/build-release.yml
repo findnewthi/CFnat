@@ -139,7 +139,7 @@ jobs:
           cd flutter/build/app/outputs/flutter-apk
           for apk in app-*-release.apk; do
             arch=$(echo "$apk" | sed 's/app-\(.*\)-release.apk/\1/')
-            cp "$apk" ${{ env.APP_NAME }}-android-${arch}.apk
+            mv "$apk" ${{ env.APP_NAME }}-android-${arch}.apk
           done
 
       - name: 上传 APK 产物

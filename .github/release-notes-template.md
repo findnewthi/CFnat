@@ -26,8 +26,10 @@
         <tr>
             <td>Windows</td>
             <td>
-                <a href="https://github.com/USER/REPO/releases/download/vVERSION/APPNAME-windows-x64-setup.exe"><img src="https://img.shields.io/badge/安装包-x64-2d7d9a.svg?logo=windows"></a><br>
+                <a href="https://github.com/USER/REPO/releases/download/vVERSION/APPNAME-windows-x64-setup.exe"><img src="https://img.shields.io/badge/安装包-x64-2d7d9a.svg?logo=windows"></a>
+                <a href="https://github.com/USER/REPO/releases/download/vVERSION/APPNAME-windows-arm64-setup.exe"><img src="https://img.shields.io/badge/安装包-arm64-2d7d9a.svg?logo=windows"></a><br>
                 <a href="https://github.com/USER/REPO/releases/download/vVERSION/APPNAME-windows-x64.zip"><img src="https://img.shields.io/badge/便携版-x64-67b7d1.svg?logo=windows"></a>
+                <a href="https://github.com/USER/REPO/releases/download/vVERSION/APPNAME-windows-arm64.zip"><img src="https://img.shields.io/badge/便携版-arm64-67b7d1.svg?logo=windows"></a>
             </td>
         </tr>
         <tr>

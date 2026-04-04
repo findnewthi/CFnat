@@ -1,19 +1,20 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use parking_lot::RwLock;
 use serde::Serialize;
 
 const MAX_LOG_ENTRIES: usize = 500;
 
+static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 fn format_time() -> String {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs() % 86400;
-    let hours = secs / 3600;
-    let mins = (secs % 3600) / 60;
-    let secs = secs % 60;
+    let start = START_TIME.get_or_init(Instant::now);
+    let elapsed = start.elapsed();
+    let total_secs = elapsed.as_secs();
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
     format!("{:02}:{:02}:{:02}", hours, mins, secs)
 }
 

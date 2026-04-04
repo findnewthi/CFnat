@@ -711,13 +711,13 @@ class _ConfigPanelState extends State<ConfigPanel> {
       borderColor = Colors.blue[700]!;
       textColor = Colors.blue[400]!;
       icon = Icons.pause_circle;
-      text = '已连接';
+      text = '已就绪';
     } else {
       bgColor = Colors.orange.withValues(alpha: 0.15);
       borderColor = Colors.orange[700]!;
       textColor = Colors.orange[400]!;
       icon = Icons.warning;
-      text = '未连接';
+      text = '未就绪';
     }
 
     return Container(

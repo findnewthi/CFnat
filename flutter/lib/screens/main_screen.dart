@@ -4,6 +4,18 @@ import '../services/app_service.dart';
 import '../widgets/config_panel.dart';
 import '../widgets/info_panel.dart';
 
+class LayoutConstants {
+  static const double configBaseWidth = 280;
+  static const double configMaxWidth = 650;
+  static const double listMinWidth = 700;
+  static const double listGap = 10;
+  static const double dividerWidth = 1;
+  
+  static double get listSideBySideThreshold => listMinWidth * 2 + listGap;
+  static double get narrowThreshold => configBaseWidth + listMinWidth + dividerWidth;
+  static double get verticalSplitMinHeight => 400;
+}
+
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -24,8 +36,7 @@ class _MainScreenState extends State<MainScreen> {
           return LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
-              final height = constraints.maxHeight;
-              final isNarrow = width < 680 || (width < 900 && height < 540);
+              final isNarrow = width < LayoutConstants.narrowThreshold;
 
               if (isNarrow) {
                 return _buildNarrowLayout(service);
@@ -73,25 +84,45 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildFlexibleLayout(AppService service) {
-    return Row(
-      children: [
-        Flexible(
-          flex: 3,
-          fit: FlexFit.loose,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              minWidth: 320,
-              maxWidth: 450,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+        final minWidthForSideBySide = LayoutConstants.configBaseWidth + 
+            LayoutConstants.listSideBySideThreshold + 
+            LayoutConstants.dividerWidth;
+        
+        double configWidth;
+        if (totalWidth >= minWidthForSideBySide) {
+          final availableForConfig = totalWidth - 
+              LayoutConstants.listSideBySideThreshold - 
+              LayoutConstants.dividerWidth;
+          configWidth = availableForConfig.clamp(
+            LayoutConstants.configBaseWidth,
+            LayoutConstants.configMaxWidth,
+          );
+        } else {
+          final availableForConfig = totalWidth - 
+              LayoutConstants.listMinWidth - 
+              LayoutConstants.dividerWidth;
+          configWidth = availableForConfig.clamp(
+            LayoutConstants.configBaseWidth,
+            LayoutConstants.configMaxWidth,
+          );
+        }
+        
+        return Row(
+          children: [
+            SizedBox(
+              width: configWidth,
+              child: ConfigPanel(service: service),
             ),
-            child: ConfigPanel(service: service),
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        Flexible(
-          flex: 7,
-          child: InfoPanel(service: service),
-        ),
-      ],
+            const VerticalDivider(width: LayoutConstants.dividerWidth),
+            Expanded(
+              child: InfoPanel(service: service),
+            ),
+          ],
+        );
+      },
     );
   }
 }

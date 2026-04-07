@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../screens/main_screen.dart' show LayoutConstants;
 import '../services/app_service.dart';
 
 class InfoPanel extends StatefulWidget {
@@ -33,9 +34,8 @@ class _InfoPanelState extends State<InfoPanel> {
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            const listMinWidth = 380.0;
-            final canFitTwo = constraints.maxWidth >= listMinWidth * 2 + 10 && !widget.forceVertical;
-            final canSplitVertical = constraints.maxHeight >= 600;
+            final canFitTwo = constraints.maxWidth >= LayoutConstants.listSideBySideThreshold && !widget.forceVertical;
+            final canSplitVertical = constraints.maxHeight >= LayoutConstants.verticalSplitMinHeight;
             
             return Padding(
               padding: const EdgeInsets.all(12),

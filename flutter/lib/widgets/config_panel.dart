@@ -528,7 +528,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
 
   Future<void> _pickFile(TextEditingController controller) async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['txt'],
         dialogTitle: '选择测速文件',

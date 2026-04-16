@@ -20,6 +20,18 @@ use rust_embed::RustEmbed;
 
 use crate::core::ServiceState;
 
+pub struct ApiConfig {
+    pub api_addr: SocketAddr,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            api_addr: "127.0.0.1:0".parse().unwrap(),
+        }
+    }
+}
+
 fn serialize_f64<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -32,7 +44,7 @@ pub struct AppState {
     pub service: Arc<ServiceState>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, PartialEq)]
 pub struct ServerConfig {
     pub addr: SocketAddr,
     pub delay_limit: u64,
@@ -66,7 +78,44 @@ impl From<crate::core::ServiceConfig> for ServerConfig {
     }
 }
 
-#[derive(Serialize)]
+impl From<crate::core::StatusInfo> for StatusResponse {
+    fn from(info: crate::core::StatusInfo) -> Self {
+        Self {
+            running: info.running,
+            uptime_secs: info.uptime_secs,
+            next_health_check: info.next_health_check,
+            health_check_interval: info.health_check_interval,
+            primary_count: info.primary_count,
+            primary_target: info.primary_target,
+            backup_count: info.backup_count,
+            backup_target: info.backup_target,
+            sticky_ips: info.sticky_ips,
+            primary_ips: info.primary_ips,
+            backup_ips: info.backup_ips,
+        }
+    }
+}
+
+impl From<&StartRequest> for crate::core::types::ConfigOverrides {
+    fn from(req: &StartRequest) -> Self {
+        Self {
+            ip_file: req.ip_file.clone(),
+            ip_content: req.ip_content.clone(),
+            http: req.http.clone(),
+            delay_limit: req.delay_limit,
+            tlr: req.tlr,
+            ips: req.ips,
+            threads: req.threads,
+            tls_port: req.tls_port,
+            http_port: req.http_port,
+            colo: req.colo.clone(),
+            listen_addr: req.listen_addr,
+            max_sticky_slots: req.max_sticky_slots,
+        }
+    }
+}
+
+#[derive(Serialize, PartialEq)]
 pub struct StatusResponse {
     pub running: bool,
     pub uptime_secs: u64,
@@ -77,86 +126,8 @@ pub struct StatusResponse {
     pub backup_count: usize,
     pub backup_target: usize,
     pub sticky_ips: Vec<String>,
-    pub primary_ips: Vec<IpInfo>,
-    pub backup_ips: Vec<IpInfo>,
-}
-
-pub struct StatusInfo {
-    pub primary_count: usize,
-    pub primary_target: usize,
-    pub backup_count: usize,
-    pub backup_target: usize,
-    pub primary_ips: Vec<IpInfo>,
-    pub backup_ips: Vec<IpInfo>,
-    pub next_health_check: u64,
-    pub sticky_ips: Vec<String>,
-}
-
-impl StatusInfo {
-    pub fn from_loadbalancer(lb: &crate::core::loadbalancer::LoadBalancer) -> Self {
-        let primary_backends = lb.get_primary_backends();
-        let backup_backends = lb.get_backup_backends();
-        
-        let primary_ips: Vec<IpInfo> = primary_backends
-            .iter()
-            .map(IpInfo::from_backend)
-            .collect();
-        
-        let backup_ips: Vec<IpInfo> = backup_backends
-            .iter()
-            .map(IpInfo::from_backend)
-            .collect();
-        
-        let sticky_ips: Vec<String> = lb.get_sticky_ips()
-            .into_iter()
-            .map(|ip| ip.to_string())
-            .collect();
-        
-        Self {
-            primary_count: lb.get_primary_count(),
-            primary_target: lb.get_primary_target(),
-            backup_count: lb.get_backup_count(),
-            backup_target: lb.get_backup_target(),
-            primary_ips,
-            backup_ips,
-            next_health_check: lb.get_next_health_check_secs(),
-            sticky_ips,
-        }
-    }
-    
-    pub fn empty() -> Self {
-        Self {
-            primary_count: 0,
-            primary_target: 0,
-            backup_count: 0,
-            backup_target: 0,
-            primary_ips: vec![],
-            backup_ips: vec![],
-            next_health_check: 0,
-            sticky_ips: vec![],
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct IpInfo {
-    pub ip: String,
-    pub colo: Option<String>,
-    pub delay: f64,
-    pub loss: f64,
-    pub samples: usize,
-}
-
-impl IpInfo {
-    pub fn from_backend(backend: &std::sync::Arc<crate::core::backend::Backend>) -> Self {
-        Self {
-            ip: backend.addr.ip().to_string(),
-            colo: backend.get_colo(),
-            delay: backend.get_avg_delay() as f64,
-            loss: backend.get_loss_rate() as f64,
-            samples: backend.get_sample_count(),
-        }
-    }
+    pub primary_ips: Vec<crate::core::IpInfo>,
+    pub backup_ips: Vec<crate::core::IpInfo>,
 }
 
 #[derive(Deserialize)]
@@ -173,13 +144,6 @@ pub struct StartRequest {
     pub colo: Option<Vec<String>>,
     pub listen_addr: Option<SocketAddr>,
     pub max_sticky_slots: Option<usize>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateConfigRequest {
-    pub delay_limit: Option<u64>,
-    pub tlr: Option<f64>,
-    pub ips: Option<usize>,
 }
 
 #[derive(Serialize)]

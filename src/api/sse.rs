@@ -8,7 +8,7 @@ use axum::{
 use serde::Serialize;
 use tokio_stream::{Stream, StreamExt};
 
-use super::{AppState, StatusResponse, StatusInfo, ServerConfig};
+use super::{AppState, StatusResponse, ServerConfig};
 
 #[derive(Serialize)]
 struct StreamUpdate {
@@ -19,44 +19,26 @@ struct StreamUpdate {
 pub async fn stream_updates(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
-        .map(move |_| {
-            let service = &state.service;
-            let running = service.is_running();
-            let uptime_secs = service.get_uptime_secs();
-            
-            let info = if let Some(lb) = service.get_loadbalancer() {
-                StatusInfo::from_loadbalancer(&lb)
-            } else {
-                StatusInfo::empty()
-            };
-            
-            let config = service.get_config();
-            
-            let status = StatusResponse {
-                running,
-                uptime_secs,
-                next_health_check: info.next_health_check,
-                health_check_interval: crate::core::config::get_global_config().health_check_interval.as_secs(),
-                primary_count: info.primary_count,
-                primary_target: info.primary_target,
-                backup_count: info.backup_count,
-                backup_target: info.backup_target,
-                sticky_ips: info.sticky_ips,
-                primary_ips: info.primary_ips,
-                backup_ips: info.backup_ips,
-            };
-            
-            let config_resp = ServerConfig::from(config);
-            
-            let update = StreamUpdate {
-                status,
-                config: config_resp,
-            };
-            
-            Ok(Event::default().json_data(update).unwrap())
-        });
+    let mut last_status_version: u64 = 0;
     
+    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
+        .filter_map(move |_| {
+            let info = state.service.build_full_status();
+            let config = state.service.get_config();
+            
+            if info.version == last_status_version {
+                return None;
+            }
+            last_status_version = info.version;
+
+            let update = StreamUpdate {
+                status: StatusResponse::from(info),
+                config: ServerConfig::from(config),
+            };
+
+            Some(Ok(Event::default().json_data(update).unwrap()))
+        });
+
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(10))

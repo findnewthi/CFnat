@@ -2,9 +2,13 @@ use std::sync::Arc;
 use std::io::{self, BufRead, Write};
 
 use cfnat::{
-    api::{create_router, AppState},
     args::Args,
     core::ServiceState,
+};
+
+#[cfg(feature = "web")]
+use cfnat::{
+    api::{create_router, AppState, ApiConfig},
 };
 
 fn print_banner() {
@@ -20,29 +24,34 @@ fn print_banner() {
 }
 
 async fn run(service: Arc<ServiceState>) {
-    let api_addr = service.get_config().api_addr;
+    #[cfg(feature = "web")]
+    {
+        let listen_addr = service.get_config().listen_addr;
+        let api_addr = Args::parse_api_addr(listen_addr)
+            .unwrap_or_else(|| ApiConfig::default().api_addr);
 
-    let api_state = AppState {
-        service: service.clone(),
-    };
+        let api_state = AppState {
+            service: service.clone(),
+        };
 
-    let app = create_router(api_state);
+        let app = create_router(api_state);
 
-    let listener = match tokio::net::TcpListener::bind(api_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("无法绑定 API 地址 {}: {}", api_addr, e);
-            std::process::exit(1);
-        }
-    };
+        let listener = match tokio::net::TcpListener::bind(api_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("无法绑定 API 地址 {}: {}", api_addr, e);
+                std::process::exit(1);
+            }
+        };
 
-    let actual_addr = listener.local_addr().unwrap();
+        let actual_addr = listener.local_addr().unwrap();
 
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
-    println!("通过 Web 界面控制: http://{} ", actual_addr);
+        println!("通过 Web 界面控制: http://{} ", actual_addr);
+    }
 
     match service.start() {
         Ok(_) => println!("服务已启动"),

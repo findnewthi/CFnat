@@ -8,6 +8,7 @@ pub mod ip;
 pub mod loadbalancer;
 pub mod pool;
 pub mod service;
+pub mod types;
 pub mod utils;
 
 pub use backend::Backend;
@@ -20,3 +21,4 @@ pub use ip::IpPool;
 pub use loadbalancer::LoadBalancer;
 pub use pool::init_global_limiter;
 pub use service::{ServiceConfig, ServiceState};
+pub use types::{ConfigOverrides, IpInfo, StatusInfo};

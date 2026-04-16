@@ -254,7 +254,6 @@ class _InfoPanelState extends State<InfoPanel> {
                   child: Text('暂无数据', style: TextStyle(color: Colors.grey[500], fontSize: ipSize)),
                 )
               : ListView.builder(
-                  key: ValueKey('$title-$count-$target-${ips.length}-${stickyIps.length}'),
                   itemCount: ips.length,
                   itemBuilder: (context, index) {
                     return _buildIpRow(ips[index], stickyIps, padding, ipSize);

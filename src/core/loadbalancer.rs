@@ -558,24 +558,20 @@ impl LoadBalancer {
     }
 
     pub fn add_to_primary(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>) {
-        let ip = addr.ip();
-        if self.contains(ip) {
-            return;
-        }
-        
-        let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
-        self.inner.write().primary.push(backend);
-        self.ip_set.write().insert(ip);
+        self.add_to_list(addr, initial_delay, initial_loss, colo, &mut self.inner.write().primary);
     }
 
     pub fn add_to_backup(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>) {
+        self.add_to_list(addr, initial_delay, initial_loss, colo, &mut self.inner.write().backup);
+    }
+
+    fn add_to_list(&self, addr: SocketAddr, initial_delay: f32, initial_loss: f32, colo: Option<String>, target: &mut Vec<Arc<Backend>>) {
         let ip = addr.ip();
         if self.contains(ip) {
             return;
         }
-        
         let backend = Arc::new(Backend::new_with_initial(addr, initial_delay, initial_loss, colo));
-        self.inner.write().backup.push(backend);
+        target.push(backend);
         self.ip_set.write().insert(ip);
     }
 

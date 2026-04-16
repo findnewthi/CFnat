@@ -81,6 +81,15 @@ class _ConfigPanelState extends State<ConfigPanel> {
   }
 
   @override
+  void didUpdateWidget(ConfigPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final config = widget.service.config;
+    if (config != null && config != _lastConfig) {
+      _initFromConfig();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Selector<AppService, (bool, bool, ConfigData?)>(
       selector: (_, service) => (service.isRunning, service.connected, service.config),
@@ -88,12 +97,6 @@ class _ConfigPanelState extends State<ConfigPanel> {
         final (isRunning, connected, config) = data;
         _isRunning = isRunning;
         _connected = connected;
-        
-        if (config != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _initFromConfig();
-          });
-        }
         
         if (widget.compact) {
           return LayoutBuilder(
@@ -828,7 +831,7 @@ class _LogPanelState extends State<_LogPanel> {
   void initState() {
     super.initState();
     _fetchLogs();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) => _fetchLogs());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _fetchLogs());
   }
 
   @override

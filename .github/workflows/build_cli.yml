@@ -1,21 +1,21 @@
-name: 构建和发布
+name: 构建纯 CLI 版本
 
 on:
   workflow_dispatch:
     inputs:
-      upload_to_repo:
-        description: '上传二进制文件到项目仓库'
-        type: boolean
-        default: false
-      create_release:
-        description: '创建发布版本'
-        type: boolean
-        default: true
       project_name:
         description: '项目名称'
         type: string
         default: 'CFnat'
         required: true
+      create_release:
+        description: '创建发布版本'
+        type: boolean
+        default: false
+      upload_to_repo:
+        description: '上传二进制文件到项目仓库'
+        type: boolean
+        default: false
       build_windows_amd64:
         description: '编译 Windows AMD64 版本'
         type: boolean
@@ -23,7 +23,7 @@ on:
       build_windows_arm64:
         description: '编译 Windows ARM64 版本'
         type: boolean
-        default: true
+        default: false
       build_linux_amd64:
         description: '编译 Linux AMD64 版本'
         type: boolean
@@ -31,7 +31,7 @@ on:
       build_linux_arm64:
         description: '编译 Linux ARM64 版本'
         type: boolean
-        default: true
+        default: false
       build_linux_amd64_gnu:
         description: '编译 Linux AMD64 动态链接版本'
         type: boolean
@@ -43,54 +43,13 @@ on:
       build_macos_amd64:
         description: '编译 MacOS AMD64 版本'
         type: boolean
-        default: true
+        default: false
       build_macos_arm64:
         description: '编译 MacOS ARM64 版本'
         type: boolean
         default: true
 
 jobs:
-  build_flutter_web:
-    name: 构建 Flutter Web
-    runs-on: ubuntu-latest
-    env:
-      APP_PACKAGE_NAME: cfnat_manager
-      APP_DISPLAY_NAME: CFnat Manager
-      APP_SHORT_NAME: CFnat
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 安装 Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.x'
-          channel: 'stable'
-
-      - name: 配置 Flutter Web 平台
-        run: |
-          cd flutter
-          flutter create . --platforms web
-
-      - name: 构建 Flutter Web
-        run: |
-          cd flutter
-          flutter pub get
-          flutter build web --release
-
-      - name: 替换标题
-        run: |
-          cd flutter/build/web
-          sed -i 's/<title>${{ env.APP_PACKAGE_NAME }}<\/title>/<title>${{ env.APP_DISPLAY_NAME }}<\/title>/g' index.html
-          sed -i 's/"name": "${{ env.APP_PACKAGE_NAME }}"/"name": "${{ env.APP_DISPLAY_NAME }}"/g' manifest.json
-          sed -i 's/"short_name": "${{ env.APP_PACKAGE_NAME }}"/"short_name": "${{ env.APP_SHORT_NAME }}"/g' manifest.json
-          sed -i 's/${{ env.APP_PACKAGE_NAME }}/${{ env.APP_DISPLAY_NAME }}/g' version.json
-
-      - name: 上传 Flutter Web 产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-web
-          path: flutter/build/web/
-
   matrix:
     name: 矩阵配置
     runs-on: ubuntu-latest
@@ -99,21 +58,20 @@ jobs:
     steps:
       - id: set
         run: |
-          # 根据用户输入动态构建矩阵
           arr=()
           [[ "${{ inputs.build_windows_amd64 }}" == true ]] && arr+=('{"os":"Windows","arch":"AMD64","target":"x86_64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
           [[ "${{ inputs.build_windows_arm64 }}" == true ]] && arr+=('{"os":"Windows","arch":"ARM64","target":"aarch64-pc-windows-msvc","runner":"windows-latest","bin":"${{ inputs.project_name }}.exe"}')
-          [[ "${{ inputs.build_linux_amd64 }}"   == true ]] && arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
-          [[ "${{ inputs.build_linux_arm64 }}"   == true ]] && arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_linux_amd64 }}" == true ]] && arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_linux_arm64 }}" == true ]] && arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
           [[ "${{ inputs.build_linux_amd64_gnu }}" == true ]] && arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
           [[ "${{ inputs.build_linux_arm64_gnu }}" == true ]] && arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"${{ inputs.project_name }}"}')
-          [[ "${{ inputs.build_macos_amd64 }}"   == true ]] && arr+=('{"os":"MacOS","arch":"AMD64","target":"x86_64-apple-darwin","runner":"macos-latest","bin":"${{ inputs.project_name }}"}')
-          [[ "${{ inputs.build_macos_arm64 }}"   == true ]] && arr+=('{"os":"MacOS","arch":"ARM64","target":"aarch64-apple-darwin","runner":"macos-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_macos_amd64 }}" == true ]] && arr+=('{"os":"MacOS","arch":"AMD64","target":"x86_64-apple-darwin","runner":"macos-latest","bin":"${{ inputs.project_name }}"}')
+          [[ "${{ inputs.build_macos_arm64 }}" == true ]] && arr+=('{"os":"MacOS","arch":"ARM64","target":"aarch64-apple-darwin","runner":"macos-latest","bin":"${{ inputs.project_name }}"}')
           echo "include=[$(IFS=,; echo "${arr[*]}")]" >> $GITHUB_OUTPUT
 
   build:
     name: 构建 ${{ matrix.os }}_${{ matrix.arch }}
-    needs: [build_flutter_web, matrix]
+    needs: [matrix]
     if: ${{ needs.matrix.outputs.include != '[]' }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -124,12 +82,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 下载 Flutter Web 产物
-        uses: actions/download-artifact@v4
-        with:
-          name: flutter-web
-          path: flutter/build/web/
-
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -138,7 +90,6 @@ jobs:
       - name: 安装 Zig
         uses: mlugg/setup-zig@v2
         with:
-#          version: master
           version: 0.15.2
 
       - name: 安装 MUSL (Linux)
@@ -155,29 +106,28 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
           rustup target add ${{ matrix.target }}
 
-      - name: 构建二进制
+      - name: 构建纯 CLI 二进制
         run: |
           cargo install --locked cargo-zigbuild
           cargo update
-          cargo zigbuild --release --features web --target ${{ matrix.target }} || cargo build --release --features web --target ${{ matrix.target }}
+          cargo zigbuild --release --target ${{ matrix.target }} || cargo build --release --target ${{ matrix.target }}
 
       - name: 保存构建产物
         run: |
-          mkdir -p binaries/${{ matrix.os }}_${{ matrix.arch }}
-          cp target/${{ matrix.target }}/release/${{ matrix.bin }} binaries/${{ matrix.os }}_${{ matrix.arch }}/
-        shell: bash
+          mkdir -p binaries/cli/${{ matrix.os }}_${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} binaries/cli/${{ matrix.os }}_${{ matrix.arch }}/
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}_${{ matrix.arch }}
-          path: binaries/${{ matrix.os }}_${{ matrix.arch }}/
+          name: cli_${{ matrix.os }}_${{ matrix.arch }}
+          path: binaries/cli/${{ matrix.os }}_${{ matrix.arch }}/
 
   strip_binaries:
     name: Strip 二进制
     needs: [matrix, build]
     if: ${{ needs.matrix.outputs.include != '[]' && needs.build.result == 'success' }}
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -185,15 +135,21 @@ jobs:
           pattern: '*_*'
       - name: Strip
         run: |
-          Get-ChildItem -Recurse -File stripped_artifacts -Include *.exe, ${{ github.event.inputs.project_name }} | ForEach-Object {
-            Write-Host "Stripping $($_.FullName)"
-            & "llvm-strip" $_.FullName
-          }
-        shell: pwsh
+          for dir in stripped_artifacts/*/; do
+            if [ -d "$dir" ]; then
+              platform=$(basename "$dir")
+              mkdir -p "stripped/$platform"
+              for bin in "$dir"*; do
+                if [ -f "$bin" ]; then
+                  llvm-strip "$bin" -o "stripped/$platform/$(basename "$bin")"
+                fi
+              done
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: stripped_artifacts
-          path: stripped_artifacts/
+          path: stripped/
 
   upload_to_repo:
     name: 上传二进制到仓库
@@ -205,12 +161,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: stripped_artifacts
-          path: binaries
+          path: binaries/cli
       - name: 上传到仓库
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "自动构建: 添加二进制文件"
-          file_pattern: 'binaries/*'
+          commit_message: "自动构建: 添加纯 CLI 二进制文件"
+          file_pattern: 'binaries/cli/*'
           skip_fetch: true
           skip_dirty_check: false
           push_options: '--force'
@@ -236,7 +192,6 @@ jobs:
               platform=$(basename "$dir")
               os=$(echo "$platform" | cut -d'_' -f1 | tr '[:upper:]' '[:lower:]')
               arch=$(echo "$platform" | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
-              # 处理 GNU 版本的后缀
               if [[ "$platform" == *"GNU"* ]]; then
                 suffix="_gnu"
               else
@@ -247,9 +202,9 @@ jobs:
               cd tmp_$platform
               if [ -n "$(ls -A .)" ]; then
                 if [[ "$os" == "windows" ]]; then
-                  zip -r "../release/${{ github.event.inputs.project_name }}_${os}_${arch}${suffix}.zip" .
+                  zip -r "../release/${{ inputs.project_name }}_cli_${os}_${arch}${suffix}.zip" .
                 else
-                  tar -czf "../release/${{ github.event.inputs.project_name }}_${os}_${arch}${suffix}.tar.gz" .
+                  tar -czf "../release/${{ inputs.project_name }}_cli_${os}_${arch}${suffix}.tar.gz" .
                 fi
               else
                 echo "跳过空目录: $dir"
@@ -259,10 +214,9 @@ jobs:
             fi
           done
 
-      # 删除旧版 tag 和 release
       - name: 删除旧版 Release 和 Tag
         run: |
-          tag="${{ github.ref_name }}-latest"
+          tag="cli-latest"
           gh release delete "$tag" -y || true
           git push origin ":refs/tags/$tag" || true
         env:
@@ -271,8 +225,8 @@ jobs:
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: "${{ github.event.inputs.project_name }} 最新版本"
-          tag_name: "${{ github.ref_name }}-latest"
+          name: "${{ inputs.project_name }} 纯 CLI 二进制最新版本"
+          tag_name: "cli-latest"
           target_commitish: ${{ github.sha }}
           files: release/*
           draft: false

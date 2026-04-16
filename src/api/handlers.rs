@@ -3,34 +3,13 @@ use axum::{
     Json,
 };
 
-use super::{AppState, ApiResponse, StartRequest, StatusResponse, StatusInfo, ServerConfig};
-use crate::core::config::get_global_config;
+use super::{AppState, ApiResponse, StartRequest, StatusResponse, ServerConfig};
+use crate::core::types::ConfigOverrides;
 use crate::log::get_log_buffer;
 
 pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
-    let service = &state.service;
-    let running = service.is_running();
-    let uptime_secs = service.get_uptime_secs();
-    
-    let info = if let Some(lb) = service.get_loadbalancer() {
-        StatusInfo::from_loadbalancer(&lb)
-    } else {
-        StatusInfo::empty()
-    };
-    
-    Json(StatusResponse {
-        running,
-        uptime_secs,
-        next_health_check: info.next_health_check,
-        health_check_interval: get_global_config().health_check_interval.as_secs(),
-        primary_count: info.primary_count,
-        primary_target: info.primary_target,
-        backup_count: info.backup_count,
-        backup_target: info.backup_target,
-        sticky_ips: info.sticky_ips,
-        primary_ips: info.primary_ips,
-        backup_ips: info.backup_ips,
-    })
+    let info = state.service.build_full_status();
+    Json(StatusResponse::from(info))
 }
 
 pub async fn get_config(State(state): State<AppState>) -> Json<ServerConfig> {
@@ -42,45 +21,16 @@ pub async fn start_service(
     Json(req): Json<StartRequest>,
 ) -> Json<ApiResponse> {
     let mut config = state.service.get_config();
-    
-    if let Some(http) = req.http {
-        config.http = http;
-    }
-    if let Some(delay_limit) = req.delay_limit {
-        config.delay_limit = delay_limit;
-    }
-    if let Some(tlr) = req.tlr {
-        config.tlr = tlr;
-    }
-    if let Some(ips) = req.ips {
-        config.ips = ips;
-    }
-    if let Some(threads) = req.threads {
-        config.threads = threads;
-    }
-    if let Some(tls_port) = req.tls_port {
-        config.tls_port = tls_port;
-    }
-    if let Some(http_port) = req.http_port {
-        config.http_port = http_port;
-    }
-    if let Some(colo) = req.colo {
-        config.colo = Some(colo);
-    }
-    if let Some(listen_addr) = req.listen_addr {
-        config.listen_addr = listen_addr;
-    }
-    if let Some(max_sticky_slots) = req.max_sticky_slots {
-        config.max_sticky_slots = max_sticky_slots;
-    }
-    
+
+    config.apply_overrides(&ConfigOverrides::from(&req));
+
     state.service.update_config(config);
-    
+
     let result = state.service.start_with_ips(
         req.ip_file.as_deref(),
         req.ip_content.as_deref(),
     );
-    
+
     match result {
         Ok(_) => Json(ApiResponse {
             success: true,

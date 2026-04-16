@@ -5,6 +5,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 
 use crate::core::{IpPool, LoadBalancer, HttpingConfig, build_hyper_client, parse_url, run_continuous_httping, run_forward, CancellationToken};
+use crate::core::types::{StatusInfo, ConfigOverrides};
 use crate::log::push_log;
 
 pub struct ServiceState {
@@ -28,8 +29,23 @@ pub struct ServiceConfig {
     pub http_port: u16,
     pub colo: Option<Vec<String>>,
     pub listen_addr: SocketAddr,
-    pub api_addr: SocketAddr,
     pub max_sticky_slots: usize,
+}
+
+impl ServiceConfig {
+    pub fn apply_overrides(&mut self, overrides: &ConfigOverrides) {
+        if let Some(v) = &overrides.ip_file { self.ip_file = v.clone(); }
+        if let Some(v) = &overrides.http { self.http = v.clone(); }
+        if let Some(v) = overrides.delay_limit { self.delay_limit = v; }
+        if let Some(v) = overrides.tlr { self.tlr = v; }
+        if let Some(v) = overrides.ips { self.ips = v; }
+        if let Some(v) = overrides.threads { self.threads = v; }
+        if let Some(v) = overrides.tls_port { self.tls_port = v; }
+        if let Some(v) = overrides.http_port { self.http_port = v; }
+        if let Some(v) = &overrides.colo { self.colo = Some(v.clone()); }
+        if let Some(v) = overrides.listen_addr { self.listen_addr = v; }
+        if let Some(v) = overrides.max_sticky_slots { self.max_sticky_slots = v; }
+    }
 }
 
 impl Default for ServiceConfig {
@@ -45,7 +61,6 @@ impl Default for ServiceConfig {
             http_port: 80,
             colo: None,
             listen_addr: "127.6.6.6:1234".parse().unwrap(),
-            api_addr: "127.0.0.1:0".parse().unwrap(),
             max_sticky_slots: 5,
         }
     }
@@ -89,6 +104,23 @@ impl ServiceState {
         }
     }
 
+    pub fn build_full_status(&self) -> StatusInfo {
+        let running = self.is_running();
+        let uptime_secs = self.get_uptime_secs();
+
+        if let Some(lb) = self.loadbalancer.read().as_ref() {
+            let mut info = StatusInfo::from_loadbalancer(lb);
+            info.running = running;
+            info.uptime_secs = uptime_secs;
+            info
+        } else {
+            let mut info = StatusInfo::empty();
+            info.running = running;
+            info.uptime_secs = uptime_secs;
+            info
+        }
+    }
+
     pub fn start(&self) -> Result<(), String> {
         if self.is_running() {
             return Err("服务已在运行".to_string());
@@ -111,16 +143,15 @@ impl ServiceState {
 
         let mut all_ips = Vec::new();
         
-        if let Some(file) = ip_file {
-            if !file.is_empty() {
-                if let Ok(f) = std::fs::File::open(file) {
-                    use std::io::{BufRead, BufReader};
-                    for line in BufReader::new(f).lines().map_while(Result::ok) {
-                        let line = line.trim();
-                        if !line.is_empty() {
-                            all_ips.push(line.to_string());
-                        }
-                    }
+        if let Some(file) = ip_file
+            && !file.is_empty()
+            && let Ok(f) = std::fs::File::open(file)
+        {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(f).lines().map_while(Result::ok) {
+                let line = line.trim();
+                if !line.is_empty() {
+                    all_ips.push(line.to_string());
                 }
             }
         }
@@ -227,10 +258,6 @@ impl ServiceState {
 
         if let Some(lb) = self.loadbalancer.read().as_ref() {
             lb.stop();
-        }
-
-        if let Some(token) = self.cancel_token.read().as_ref() {
-            token.cancel();
         }
         
         self.running.store(false, Ordering::Relaxed);

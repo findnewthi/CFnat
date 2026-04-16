@@ -44,13 +44,6 @@ impl Args {
                         config.listen_addr = addr;
                     }
                 }
-                "api" => {
-                    if let Some(v) = v_opt
-                        && let Ok(addr) = v.parse::<SocketAddr>()
-                    {
-                        config.api_addr = addr;
-                    }
-                }
                 "colo" => {
                     config.colo = v_opt.map(|v| {
                         v.split(',')
@@ -104,17 +97,21 @@ impl Args {
                         .and_then(|v| v.parse::<usize>().ok())
                         .map_or(config.max_sticky_slots, |v| v.clamp(1, 32));
                 }
+                #[cfg(feature = "web")]
+                "api" => {
+                    // -api 参数由 parse_api_addr() 处理，这里忽略
+                }
+                #[cfg(not(feature = "web"))]
+                "api" => {
+                    eprintln!("错误: -api 参数需要启用 web feature");
+                    std::process::exit(1);
+                }
                 _ => {
                     print_help();
                     eprintln!("无效的参数: {k}");
                     std::process::exit(1);
                 }
             }
-        }
-        
-        if config.api_addr == config.listen_addr && config.api_addr.port() != 0 {
-            eprintln!("错误: -api 和 -addr 参数不能使用相同地址: {}", config.api_addr);
-            std::process::exit(1);
         }
         
         config
@@ -141,6 +138,27 @@ impl Args {
         }
 
         result
+    }
+
+    #[cfg(feature = "web")]
+    pub fn parse_api_addr(listen_addr: SocketAddr) -> Option<SocketAddr> {
+        let args: Vec<String> = env::args().collect();
+        let parsed = Self::parse_args_to_vec(args.iter().skip(1).cloned());
+
+        for (k, v_opt) in parsed {
+            if k == "api" {
+                if let Some(v) = v_opt
+                    && let Ok(addr) = v.parse::<SocketAddr>()
+                {
+                    if addr == listen_addr && addr.port() != 0 {
+                        eprintln!("错误: -api 和 -addr 参数不能使用相同地址: {}", addr);
+                        std::process::exit(1);
+                    }
+                    return Some(addr);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -187,8 +205,9 @@ fn format_help_line(name: &str, desc: &str, default: &str) -> String {
 }
 
 pub fn print_help() {
-    const HELP_ARGS: &[(&str, &str, &str)] = &[
+    let help_args = vec![
         ("-addr", "本地监听的 IP 和端口", "127.6.6.6:1234"),
+        #[cfg(feature = "web")]
         ("-api", "API 服务地址和端口，端口 0 自动分配", "127.0.0.1:0"),
         ("-colo", "筛选一个或多个数据中心，例如 HKG,LAX", "未指定"),
         ("-dl", "有效连接的平均延迟上限（毫秒）", "500"),
@@ -204,7 +223,7 @@ pub fn print_help() {
 
     println!("\x1b[1;35m参数说明\x1b[0m\n");
 
-    for (name, desc, default) in HELP_ARGS.iter() {
+    for (name, desc, default) in help_args.iter() {
         print!("{}", format_help_line(name, desc, default));
     }
 }

@@ -182,7 +182,7 @@ class ApiService extends AppService {
         if (tlsPort != null) 'tls_port': tlsPort,
         if (httpPort != null) 'http_port': httpPort,
         if (colo != null) 'colo': colo,
-        if (listenAddr != null) 'listen_addr': listenAddr,
+        if (listenAddr != null) 'addr': listenAddr,
         if (maxStickySlots != null) 'max_sticky_slots': maxStickySlots,
       };
 

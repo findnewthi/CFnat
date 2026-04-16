@@ -110,6 +110,6 @@ pub struct ConfigOverrides {
     pub tls_port: Option<u16>,
     pub http_port: Option<u16>,
     pub colo: Option<Vec<String>>,
-    pub listen_addr: Option<SocketAddr>,
+    pub addr: Option<SocketAddr>,
     pub max_sticky_slots: Option<usize>,
 }

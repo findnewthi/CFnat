@@ -8,12 +8,13 @@ use axum::{
 use serde::Serialize;
 use tokio_stream::{Stream, StreamExt};
 
-use super::{AppState, StatusResponse, ServerConfig};
+use super::{AppState, StatusResponse};
+use crate::core::ServiceConfig;
 
 #[derive(Serialize)]
 struct StreamUpdate {
     status: StatusResponse,
-    config: ServerConfig,
+    config: ServiceConfig,
 }
 
 pub async fn stream_updates(
@@ -33,7 +34,7 @@ pub async fn stream_updates(
 
             let update = StreamUpdate {
                 status: StatusResponse::from(info),
-                config: ServerConfig::from(config),
+                config,
             };
 
             Some(Ok(Event::default().json_data(update).unwrap()))

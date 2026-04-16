@@ -28,7 +28,7 @@ pub struct ServiceConfig {
     pub tls_port: u16,
     pub http_port: u16,
     pub colo: Option<Vec<String>>,
-    pub listen_addr: SocketAddr,
+    pub addr: SocketAddr,
     pub max_sticky_slots: usize,
 }
 
@@ -43,7 +43,7 @@ impl ServiceConfig {
         if let Some(v) = overrides.tls_port { self.tls_port = v; }
         if let Some(v) = overrides.http_port { self.http_port = v; }
         if let Some(v) = &overrides.colo { self.colo = Some(v.clone()); }
-        if let Some(v) = overrides.listen_addr { self.listen_addr = v; }
+        if let Some(v) = overrides.addr { self.addr = v; }
         if let Some(v) = overrides.max_sticky_slots { self.max_sticky_slots = v; }
     }
 }
@@ -60,7 +60,7 @@ impl Default for ServiceConfig {
             tls_port: 443,
             http_port: 80,
             colo: None,
-            listen_addr: "127.6.6.6:1234".parse().unwrap(),
+            addr: "127.6.6.6:1234".parse().unwrap(),
             max_sticky_slots: 5,
         }
     }
@@ -216,7 +216,7 @@ impl ServiceState {
         let tls_port = config.tls_port;
         let http_port = config.http_port;
         let delay_limit = config.delay_limit;
-        let listen_addr = config.listen_addr;
+        let addr = config.addr;
         let cancel_token_for_httping = cancel_token.clone();
 
         tokio::spawn(async move {
@@ -243,7 +243,7 @@ impl ServiceState {
         let forward_cancel_token = cancel_token.clone();
         
         tokio::spawn(async move {
-            if let Err(e) = run_forward(listen_addr, lb_forward, tls_port, http_port, forward_cancel_token).await {
+            if let Err(e) = run_forward(addr, lb_forward, tls_port, http_port, forward_cancel_token).await {
                 push_log("ERROR", &format!("转发服务错误：{}", e));
             }
         });

@@ -26,8 +26,8 @@ fn print_banner() {
 async fn run(service: Arc<ServiceState>) {
     #[cfg(feature = "web")]
     {
-        let listen_addr = service.get_config().listen_addr;
-        let api_addr = Args::parse_api_addr(listen_addr)
+        let addr = service.get_config().addr;
+        let api_addr = Args::parse_api_addr(addr)
             .unwrap_or_else(|| ApiConfig::default().api_addr);
 
         let api_state = AppState {

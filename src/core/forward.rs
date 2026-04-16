@@ -115,16 +115,16 @@ async fn handle_client(
 }
 
 pub async fn run_forward(
-    listen_addr: SocketAddr,
+    addr: SocketAddr,
     lb: Arc<LoadBalancer>,
     tls_port: u16,
     http_port: u16,
     cancel_token: CancellationToken,
 ) -> io::Result<()> {
-    let listener = TcpListener::bind(listen_addr).await?;
+    let listener = TcpListener::bind(addr).await?;
 
     push_log("INFO", &format!("转发服务 {} (TLS:{}, HTTP:{})", 
-        listen_addr, tls_port, http_port));
+        addr, tls_port, http_port));
 
     loop {
         tokio::select! {

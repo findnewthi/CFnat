@@ -3,8 +3,8 @@ use axum::{
     Json,
 };
 
-use super::{AppState, ApiResponse, StartRequest, StatusResponse, ServerConfig};
-use crate::core::types::ConfigOverrides;
+use super::{AppState, ApiResponse, StartRequest, StatusResponse};
+use crate::core::{ServiceConfig, types::ConfigOverrides};
 use crate::log::get_log_buffer;
 
 pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
@@ -12,8 +12,8 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(StatusResponse::from(info))
 }
 
-pub async fn get_config(State(state): State<AppState>) -> Json<ServerConfig> {
-    Json(ServerConfig::from(state.service.get_config()))
+pub async fn get_config(State(state): State<AppState>) -> Json<ServiceConfig> {
+    Json(state.service.get_config())
 }
 
 pub async fn start_service(

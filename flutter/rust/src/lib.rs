@@ -57,7 +57,7 @@ pub struct ConfigInfo {
     pub tls_port: i32,
     pub http_port: i32,
     pub max_sticky_slots: i32,
-    pub listen_addr: String,
+    pub addr: String,
     pub colo: Option<Vec<String>>,
 }
 
@@ -89,7 +89,7 @@ fn build_overrides(
     tls_port: Option<i32>,
     http_port: Option<i32>,
     max_sticky_slots: Option<i32>,
-    listen_addr: Option<String>,
+    addr: Option<String>,
     colo: Option<Vec<String>>,
 ) -> ConfigOverrides {
     ConfigOverrides {
@@ -103,7 +103,7 @@ fn build_overrides(
         tls_port: tls_port.map(|v| v as u16),
         http_port: http_port.map(|v| v as u16),
         colo,
-        listen_addr: listen_addr.and_then(|v| v.parse().ok()),
+        addr: addr.and_then(|v| v.parse().ok()),
         max_sticky_slots: max_sticky_slots.map(|v| v as usize),
     }
 }
@@ -120,7 +120,7 @@ pub fn start_service(
     tls_port: Option<i32>,
     http_port: Option<i32>,
     max_sticky_slots: Option<i32>,
-    listen_addr: Option<String>,
+    addr: Option<String>,
     colo: Option<Vec<String>>,
 ) -> bool {
     let runtime = get_runtime();
@@ -132,7 +132,7 @@ pub fn start_service(
     let overrides = build_overrides(
         ip_file, ip_content, http, delay_limit, tlr,
         ips, threads, tls_port, http_port,
-        max_sticky_slots, listen_addr, colo,
+        max_sticky_slots, addr, colo,
     );
     config.apply_overrides(&overrides);
 
@@ -196,7 +196,7 @@ pub fn get_config() -> ConfigInfo {
         tls_port: config.tls_port as i32,
         http_port: config.http_port as i32,
         max_sticky_slots: config.max_sticky_slots as i32,
-        listen_addr: config.listen_addr.to_string(),
+        addr: config.addr.to_string(),
         colo: config.colo,
     }
 }

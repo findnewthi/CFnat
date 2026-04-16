@@ -41,7 +41,7 @@ impl Args {
                     if let Some(v) = v_opt
                         && let Ok(addr) = v.parse::<SocketAddr>()
                     {
-                        config.listen_addr = addr;
+                        config.addr = addr;
                     }
                 }
                 "colo" => {
@@ -141,20 +141,20 @@ impl Args {
     }
 
     #[cfg(feature = "web")]
-    pub fn parse_api_addr(listen_addr: SocketAddr) -> Option<SocketAddr> {
+    pub fn parse_api_addr(service_addr: SocketAddr) -> Option<SocketAddr> {
         let args: Vec<String> = env::args().collect();
         let parsed = Self::parse_args_to_vec(args.iter().skip(1).cloned());
 
         for (k, v_opt) in parsed {
             if k == "api" {
                 if let Some(v) = v_opt
-                    && let Ok(addr) = v.parse::<SocketAddr>()
+                    && let Ok(parsed_addr) = v.parse::<SocketAddr>()
                 {
-                    if addr == listen_addr && addr.port() != 0 {
-                        eprintln!("错误: -api 和 -addr 参数不能使用相同地址: {}", addr);
+                    if parsed_addr == service_addr && parsed_addr.port() != 0 {
+                        eprintln!("错误: -api 和 -addr 参数不能使用相同地址: {}", parsed_addr);
                         std::process::exit(1);
                     }
-                    return Some(addr);
+                    return Some(parsed_addr);
                 }
             }
         }

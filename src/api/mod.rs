@@ -6,7 +6,7 @@ pub use handlers::*;
 pub use routes::create_router;
 pub use sse::stream_updates;
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -32,50 +32,9 @@ impl Default for ApiConfig {
     }
 }
 
-fn serialize_f64<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_f64((*value * 100.0).round() / 100.0)
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub service: Arc<ServiceState>,
-}
-
-#[derive(Clone, Serialize, PartialEq)]
-pub struct ServerConfig {
-    pub addr: SocketAddr,
-    pub delay_limit: u64,
-    #[serde(serialize_with = "serialize_f64")]
-    pub tlr: f64,
-    pub ips: usize,
-    pub threads: usize,
-    pub tls_port: u16,
-    pub http_port: u16,
-    pub colo: Option<Vec<String>>,
-    pub http: String,
-    pub ip_file: String,
-    pub max_sticky_slots: usize,
-}
-
-impl From<crate::core::ServiceConfig> for ServerConfig {
-    fn from(config: crate::core::ServiceConfig) -> Self {
-        Self {
-            addr: config.listen_addr,
-            delay_limit: config.delay_limit,
-            tlr: config.tlr,
-            ips: config.ips,
-            threads: config.threads,
-            tls_port: config.tls_port,
-            http_port: config.http_port,
-            colo: config.colo,
-            http: config.http,
-            ip_file: config.ip_file,
-            max_sticky_slots: config.max_sticky_slots,
-        }
-    }
 }
 
 impl From<crate::core::StatusInfo> for StatusResponse {
@@ -109,7 +68,7 @@ impl From<&StartRequest> for crate::core::types::ConfigOverrides {
             tls_port: req.tls_port,
             http_port: req.http_port,
             colo: req.colo.clone(),
-            listen_addr: req.listen_addr,
+            addr: req.addr,
             max_sticky_slots: req.max_sticky_slots,
         }
     }
@@ -142,7 +101,7 @@ pub struct StartRequest {
     pub tls_port: Option<u16>,
     pub http_port: Option<u16>,
     pub colo: Option<Vec<String>>,
-    pub listen_addr: Option<SocketAddr>,
+    pub addr: Option<SocketAddr>,
     pub max_sticky_slots: Option<usize>,
 }
 

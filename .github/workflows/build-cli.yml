@@ -1,0 +1,49 @@
+name: Build CLI (No Frontend/API)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "cli-v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux-amd64
+            bin: target/release/cfnat-cli
+            ext: ""
+          - os: windows-latest
+            artifact: windows-amd64
+            bin: target/release/cfnat-cli.exe
+            ext: ".exe"
+          - os: macos-latest
+            artifact: macos
+            bin: target/release/cfnat-cli
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build CLI only
+        run: cargo build --release --bin cfnat-cli
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.bin }}" "dist/CFnat-cli${{ matrix.ext }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfnat-cli-${{ matrix.artifact }}
+          path: dist/*

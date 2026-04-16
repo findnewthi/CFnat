@@ -11,7 +11,7 @@ on:
       create_release:
         description: '创建发布版本'
         type: boolean
-        default: true
+        default: false
       upload_to_repo:
         description: '上传二进制文件到项目仓库'
         type: boolean
@@ -23,7 +23,7 @@ on:
       build_windows_arm64:
         description: '编译 Windows ARM64 版本'
         type: boolean
-        default: true
+        default: false
       build_linux_amd64:
         description: '编译 Linux AMD64 版本'
         type: boolean
@@ -31,7 +31,7 @@ on:
       build_linux_arm64:
         description: '编译 Linux ARM64 版本'
         type: boolean
-        default: true
+        default: false
       build_linux_amd64_gnu:
         description: '编译 Linux AMD64 动态链接版本'
         type: boolean
@@ -43,7 +43,7 @@ on:
       build_macos_amd64:
         description: '编译 MacOS AMD64 版本'
         type: boolean
-        default: true
+        default: false
       build_macos_arm64:
         description: '编译 MacOS ARM64 版本'
         type: boolean
@@ -127,7 +127,7 @@ jobs:
     name: Strip 二进制
     needs: [matrix, build]
     if: ${{ needs.matrix.outputs.include != '[]' && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -135,21 +135,15 @@ jobs:
           pattern: '*_*'
       - name: Strip
         run: |
-          for dir in stripped_artifacts/*/; do
-            if [ -d "$dir" ]; then
-              platform=$(basename "$dir")
-              mkdir -p "stripped/$platform"
-              for bin in "$dir"*; do
-                if [ -f "$bin" ]; then
-                  llvm-strip "$bin" -o "stripped/$platform/$(basename "$bin")"
-                fi
-              done
-            fi
-          done
+          Get-ChildItem -Recurse -File stripped_artifacts -Include *.exe, ${{ github.event.inputs.project_name }} | ForEach-Object {
+            Write-Host "Stripping $($_.FullName)"
+            & "llvm-strip" $_.FullName
+          }
+        shell: pwsh
       - uses: actions/upload-artifact@v4
         with:
           name: stripped_artifacts
-          path: stripped/
+          path: stripped_artifacts/
 
   upload_to_repo:
     name: 上传二进制到仓库

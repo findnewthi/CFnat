@@ -114,14 +114,14 @@ jobs:
 
       - name: 保存构建产物
         run: |
-          mkdir -p binaries/cli/${{ matrix.os }}_${{ matrix.arch }}
-          cp target/${{ matrix.target }}/release/${{ matrix.bin }} binaries/cli/${{ matrix.os }}_${{ matrix.arch }}/
+          mkdir -p binaries/CLI/${{ matrix.os }}_${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} binaries/CLI/${{ matrix.os }}_${{ matrix.arch }}/
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: cli_${{ matrix.os }}_${{ matrix.arch }}
-          path: binaries/cli/${{ matrix.os }}_${{ matrix.arch }}/
+          name: CLI_${{ matrix.os }}_${{ matrix.arch }}
+          path: binaries/CLI/${{ matrix.os }}_${{ matrix.arch }}/
 
   strip_binaries:
     name: Strip 二进制
@@ -155,12 +155,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: stripped_artifacts
-          path: binaries/cli
+          path: binaries/CLI
       - name: 上传到仓库
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "自动构建: 添加纯 CLI 二进制文件"
-          file_pattern: 'binaries/cli/*'
+          file_pattern: 'binaries/CLI/*'
           skip_fetch: true
           skip_dirty_check: false
           push_options: '--force'
@@ -196,9 +196,9 @@ jobs:
               cd tmp_$platform
               if [ -n "$(ls -A .)" ]; then
                 if [[ "$os" == "windows" ]]; then
-                  zip -r "../release/${{ inputs.project_name }}_cli_${os}_${arch}${suffix}.zip" .
+                  zip -r "../release/${{ inputs.project_name }}_CLI_${os}_${arch}${suffix}.zip" .
                 else
-                  tar -czf "../release/${{ inputs.project_name }}_cli_${os}_${arch}${suffix}.tar.gz" .
+                  tar -czf "../release/${{ inputs.project_name }}_CLI_${os}_${arch}${suffix}.tar.gz" .
                 fi
               else
                 echo "跳过空目录: $dir"
@@ -210,7 +210,7 @@ jobs:
 
       - name: 删除旧版 Release 和 Tag
         run: |
-          tag="cli-latest"
+          tag="CLI-latest"
           gh release delete "$tag" -y || true
           git push origin ":refs/tags/$tag" || true
         env:
@@ -220,7 +220,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           name: "${{ inputs.project_name }} 纯 CLI 二进制最新版本"
-          tag_name: "cli-latest"
+          tag_name: "CLI-latest"
           target_commitish: ${{ github.sha }}
           files: release/*
           draft: false
